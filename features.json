@@ -10,7 +10,7 @@
       "name": "Default unit/contract suite (core purity, engine, api, cli, gui smoke, court deterministic, training units)",
       "status": "passing",
       "verification": "PYTHONPATH=src:tests $PY -m pytest -q -m \"not slow and not e2e\" -p no:cacheprovider",
-      "evidence": "2026-09-20: 327 passed, 5 skipped, 27 deselected in 25.03s on Apple Silicon Python 3.12. Run outside the workspace sandbox so CoreML and VideoToolbox were exercised; project venv was first on PATH for release-script subprocesses."
+      "evidence": "2026-10-07: 483 passed, 7 skipped, 49 deselected in 77.94s on Apple Silicon Python 3.11, v0.6 weights present, host CoreML/VideoToolbox/socket access. Includes 8 native service tests."
     },
     {
       "id": "golden-cli-parity",
@@ -24,7 +24,7 @@
       "name": "src+tests byte-compile cleanly",
       "status": "passing",
       "verification": "$PY -m compileall -q src tests",
-      "evidence": "2026-09-20: exit 0 with the local source-install venv."
+      "evidence": "2026-10-07: exit 0 with .venv-train, including src, tests and scripts/native."
     },
     {
       "id": "tcn-v050-default",
@@ -102,7 +102,14 @@
       "status": "passing",
       "verification": "PYTHONPATH=src:tests $PY -m pytest -q tests/test_segment.py tests/test_gui_smoke.py tests/test_api_job_lifecycle.py tests/test_api_route_contracts.py -p no:cacheprovider",
       "evidence": "2026-09-20: 84 targeted segmentation/proxy/GUI/API tests passed; full fast gate 338 passed, 5 skipped, 27 deselected; golden CLI parity 1 passed. On the user's exact 3840x2880 DJI footage, Apple's native 720p30 media-engine transcode processed 60 source seconds in 9.06s (6.6x realtime, 1.73s user CPU); packet-remux joined two proxy minutes in 0.30s. Tests cover audio/timeline remux and cancellation without software fallback."
+    },
+    {
+      "id": "native-macos",
+      "name": "SwiftUI macOS desktop with original logo, native continuous playback, point editing, v0.6 analysis and AVFoundation exports",
+      "status": "active",
+      "verification": "swift test --package-path macos; $PY scripts/native/smoke.py --backend dist/native/RallyClip.app/Contents/Resources/Backend/RallyClipBackend; interactive native UI QA; Release workflow desktop=native",
+      "evidence": "2026-10-07: app builds; 5 Swift tests and 8 native API tests pass. Packaged v0.6 import, edit/reset/delete, decoded-frame playback and exact 4s export passed. Delayed audio regression passed after rendering silence via audio mix. Interactive import, save edit and MP4 export passed. Signed CI build pending."
     }
   ],
-  "active": "continuous-folder-import"
+  "active": "native-macos"
 }

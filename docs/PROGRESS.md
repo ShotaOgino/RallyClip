@@ -1,32 +1,47 @@
-# PROGRESS — overwrite me at every session end
+# PROGRESS
 
-_Last updated: 2026-09-26 (session: dismiss folder tokens and drop avconvert)._
+_Updated 2026-10-07: native macOS implementation._
 
 ## Repo state
 
-- Topic branch `fix/pr59-export-guards`, based on PR #59 (`fa2d55b`). Do not
-  commit to `main`. The user merges.
-- App version remains **0.5.1** and the inference artifact remains
-  `models/rallyclip_v0.5.0`.
+- Worktree `native-macos`, branch `feat/native-macos`, based on
+  `feat/runtime-v060` with `fix/pr59-export-guards` merged (7dccd30).
+- App/model version 0.6.0. Verified weights are published in GitHub release
+  `artifact-rallyclip_v0.6.0`; no binaries added to git.
+- Do not merge; the user merges. Runtime PR #62 is still a dependency.
 
-## What changed this session
+## Implementation
 
-1. Stream copy remuxes a video-only cut only when a keyframe already sits on
-   the boundary, in decode order, and otherwise falls back to encode.
-2. Folder preflight rejects mixed audio before analysis. Tokens expire after
-   30 minutes, a ninth pending selection is refused, and the UI posts
-   `/api/folder/dismiss` when the user removes, replaces, or re-chooses a folder.
-3. Analysis proxies are created only with PyAV. Each clip's audio stays on
-   that clip's timeline, including a late start. Multiple video or audio
-   tracks are rejected.
-4. Cancel signals the worker process group, deletes a partial
-   `analysis_proxy.mp4`, and does not replace an installer if hashing is
-   cancelled. A second export start does not spawn another thread.
+- Native SwiftUI sidebar/player/editor with original RallyClip logo/icon,
+  system font, light/dark appearance, green accent, factual UI text.
+- Single continuous AVFoundation composition across points/camera files;
+  full-match mode, fullscreen/PiP, seek, point selection, timeline zoom.
+- Save/discard/reset boundary edits; add/delete intervals; guard navigation,
+  window close, quitting, active exports and analysis.
+- Native all-point/highlight/separate-video and CSV export, staging,
+  cancellation, progress. Audio mix renders silence at delayed-audio gaps.
+- Authenticated loopback helper bundles the proven v0.6 torch-free engine and
+  learned court detector. Native imports reference originals and analyze a
+  720p proxy. Existing Application Support saved matches are reused.
+- Local build/run scripts, Swift tests/media probe, packaged import/edit/media
+  smoke. Release workflow defaults to native; retains legacy manual option;
+  existing Apple secrets/scripts sign, notarize, staple and upload the DMG.
 
-## Next steps
+## Verification this session
 
-1. Run `greptile review --branch main --agent` until Confidence is 5/5, then
-   open the PR. Do not merge.
-2. Run one complete real-world import against a consecutive 4K camera folder,
-   confirming source ordering, proxy wall time, boundary alignment, final
-   dimensions, audio, and export quality.
+- Python gate: 483 passed, 7 skipped, 49 deselected; compileall and scoped ruff pass.
+- Swift: 5 tests pass, including exported frame verification across a source boundary.
+- Frozen backend analyzed the tennis fixture; edit/reset/delete passed. Native
+  playback decoded 189 frames across three cuts; four-second export duration
+  4.000067s, observed advancing-playback gaps about 23ms.
+- Delayed audio boundary test verifies sound/silence/sound with decoded samples;
+  native exporter now renders silence instead of passing AAC gap edit lists.
+- Interactive import, saved edits and native MP4 export passed; output1280x720,
+  17.466s as expected. Isolated library `/private/tmp/rallyclip-native-qa`.
+
+## Remaining
+
+- Run final packaged smoke and window-close guard QA on the final UI build.
+- Push PR stacked on `feat/runtime-v060`; Greptile until 5/5.
+- Run existing Release workflow on this branch; verify signed/notarized DMG,
+  download it and test installed bundle on this Mac. Update evidence/results.

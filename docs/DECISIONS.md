@@ -621,3 +621,30 @@ data/labels/metric, not optimization.** Do not re-run these:
   file replace. The first of several camera tracks is not a safe guess.
 - **Rejected:** Including the pad as export context; sorting remux packets by
   presentation time; picking track zero when a file has several.
+
+## 2026-10-07 — Native macOS playback and editing, proven ONNX analysis
+
+- **What:** SwiftUI/AppKit replace the macOS webview UI. AVPlayer uses one
+  continuous AVMutableComposition for point cuts, including points crossing
+  source-file boundaries. Native AVFoundation exports preserve original
+  resolution. The existing v0.6 Python/ONNX engine is frozen as a private helper;
+  analysis and saved-match mutations retain the HTTP API. The user explicitly
+  requested this native implementation after reporting stuttery playback.
+- **Why:** Removes browser buffering and repeated cut-boundary seeks without
+  changing the latest model, learned W32 court detector, near/far pose features,
+  manifest contract, or existing CLI/browser support. No CoreML conversion or
+  model retraining is required to ship native media playback.
+- **Details:** Keep owning AVAssets alive while copying their weakly-owned
+  tracks. Represent late-audio gaps explicitly and force an audio mix on export
+  so AAC passthrough edit lists cannot repeat sound across silence in other
+  players. Stage exports and preserve existing destinations until completion.
+  Protect all helper requests with a per-launch token, reject browsers/rebinding,
+  use a private readiness file, and stop workers when the app exits.
+- **UI:** Keep the original logo/icon, use a native sidebar, system font and
+  green accent. The user rejected cream/Georgia styling and promotional copy;
+  interface text should remain factual.
+- **Release:** Published the checksum-verified v0.6 inference artifact separately
+  from the desktop app. The existing Release workflow defaults to the native
+  build and reuses the existing Developer ID/notarization scripts and secrets;
+  legacy manual builds remain available. Desktop tags still create drafts, and
+  the user merges/publishes.

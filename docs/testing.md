@@ -16,11 +16,8 @@ equivalent alternative; `.venv-train` is what was verified 2026-07-03.)
 PYTHONPATH=src:tests $PY -m pytest -q -m "not slow and not e2e" -p no:cacheprovider
 ```
 
-Last known (2026-09-26, Apple Silicon, weights not fetched):
-**348 passed, 11 skipped, 50 deselected** with
-`-k "not test_preview_window_generation_latency_benchmark"`. The extra skips
-are missing `models/rallyclip_v0.5.0` artifacts. That preview benchmark is
-outside this diff and took 18.5–22.6s on this host against a 10s budget.
+Last known (2026-10-07, native-macos worktree, v0.6 weights present):
+**483 passed, 7 skipped, 49 deselected** in 77.94s, without exclusions.
 CoreML and VideoToolbox tests require normal host hardware/cache access;
 release-script subprocesses require the project venv first on `PATH` when
 Apple's `/usr/bin/python3` is unavailable.
@@ -31,7 +28,18 @@ Apple's `/usr/bin/python3` is unavailable.
 $PY -m compileall -q src tests
 ```
 
-Last known (2026-09-26): exit 0 with `.venv-train`.
+Last known (2026-10-07): exit 0 with `.venv-train` (including scripts/native).
+
+## Native macOS
+
+`swift test --package-path macos`: **5 passed** on 2026-10-07, including a
+synthetic camera-boundary composition/export/frame-content test. Swift requires
+normal host access to its caches and media services.
+
+`$PY scripts/native/smoke.py --backend dist/native/RallyClip.app/Contents/Resources/Backend/RallyClipBackend`
+checks a frozen import, edit/reset/delete, decoded-frame playback through three
+cuts, exact export duration, and delayed audio across a camera boundary. Run after
+`RALLYCLIP_BUILD_PYTHON="$PY" bash scripts/native/build.sh`. See docs/native-macos.md.
 
 ## Golden CLI parity (run when touching pipeline/engine/extraction/decode)
 
