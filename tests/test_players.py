@@ -3,6 +3,7 @@ engine wiring (RunRequest.save_player_tracks). Synthetic keypoints only: no vide
 no model artifact."""
 from __future__ import annotations
 
+import dataclasses
 import json
 from pathlib import Path
 
@@ -22,6 +23,7 @@ from analysis.players import (
     serve_consistency,
     track_identities,
 )
+from analysis.serve_side import ROW_KEYS
 from rallyclip_core.contracts import RunRequest, RunResult, RuntimeDeps
 from rallyclip_core.pipelines import FRAME_STARTEND_HEATMAP, resolve_pipeline_spec
 
@@ -251,13 +253,19 @@ def test_analyze_points_rows_and_document():
     assert set(rows[0]) == {
         "start_s", "end_s", "server", "server_confidence", "server_id", "near_id", "far_id",
         "identity_confidence", "side_change_before", "near_present_frac", "far_present_frac",
+        *ROW_KEYS,
     }
+    assert {r["serve_side_visual"] for r in rows} == {None}  # no court geometry
+    # score parity from the server-id segmentation: two games of 4 points
+    assert [r["serve_side"] for r in rows] == ["deuce", "ad"] * 4
+    assert {r["serve_side_source"] for r in rows} == {"score"}
     assert [r["server"] for r in rows] == ["near"] * 8
     assert [r["server_id"] for r in rows] == ["A"] * 4 + ["B"] * 4
     assert rows[0]["near_present_frac"] == 1.0 and rows[0]["far_present_frac"] == 0.0
     doc = points_document(rows)
     assert doc["schema"] == "rallyclip.points/v1"
     assert doc["side_changes_s"] == [187.0]
+    assert doc["serve_side_check"]["n_score"] == 8 and doc["serve_side_check"]["n_visual"] == 0
     json.dumps(doc)  # serialisable
 
 
@@ -340,7 +348,7 @@ def _deps() -> RuntimeDeps:
     )
 
 
-def _run_engine(tmp_path, monkeypatch, *, save_player_tracks):
+def _run_engine(tmp_path, monkeypatch, *, save_player_tracks, geometry=None):
     from rallyclip_engine import models as engine_models
     from rallyclip_engine.models import build_analysis_model
     import infer
@@ -356,6 +364,8 @@ def _run_engine(tmp_path, monkeypatch, *, save_player_tracks):
 
     def fake_stream(request, deps, pcb, ccb, player_sink=None):
         seen["player_sink"] = player_sink
+        if player_sink is not None and geometry is not None:
+            player_sink.geometry = geometry  # build_feature_stream sets the run's court geometry
         for i in range(n):
             if player_sink is not None:
                 player_sink.append((_pose(**NEAR, raise_arm=12 <= i <= 16), None))
@@ -395,6 +405,27 @@ def test_engine_player_outputs_opt_in(tmp_path, monkeypatch):
     assert doc["schema"] == "rallyclip.points/v1"
     assert len(doc["points"]) == len(result.intervals_sec) == 1
     assert doc["points"][0]["server"] == "near" and doc["points"][0]["server_id"] == "A"
+
+
+def test_engine_player_outputs_carry_serve_side_and_geometry(tmp_path, monkeypatch):
+    """The sink's court geometry (v2 net-line runs) reaches the points rows (visual serve
+    side) and the players npz (``geometry_json``). Synthetic 1280x720 court: centre line
+    at x = 600 px, near baseline at y ~ 697 px; the near server stands right of it."""
+    from preprocessing.netline_slots import CourtGeometry
+
+    m_to_px = np.array([[40.0, 0.0, 600.0], [0.0, -25.0, 400.0], [0.0, 0.0, 1.0]])
+    geom = CourtGeometry(np.array([380.0, 400.0]), np.array([820.0, 400.0]), np.linalg.inv(m_to_px), "t")
+    result, _seen = _run_engine(tmp_path, monkeypatch, save_player_tracks=True, geometry=geom)
+    doc = json.loads(Path(result.diagnostics["points_json"]).read_text(encoding="utf-8"))
+    row = doc["points"][0]
+    assert row["server"] == "near"
+    assert row["serve_side"] == "deuce" and row["serve_side_source"] == "server"
+    assert row["serve_side_visual_confidence"] > 0.9
+    assert doc["serve_side_check"]["n_visual"] == 1
+    with np.load(result.diagnostics["players_npz"]) as d:
+        saved = json.loads(str(d["geometry_json"]))
+    np.testing.assert_allclose(saved["homography_px_to_m"], np.linalg.inv(m_to_px))
+    assert saved["net_line_px"] == [[380.0, 400.0], [820.0, 400.0]]
 
 
 def test_tee_player_records_keeps_only_kept_frames():
@@ -452,7 +483,52 @@ def test_build_feature_stream_player_sink(tmp_path):
     assert [float(raw["boxes"][0, 2]) for _n, _f, raw in sink] == [2.0, 4.0, 8.0, 10.0]
     assert set(sink[0][2]) == {"boxes"}
     assert sink.raw_scale == (1.0, 1.0)
+    assert sink.geometry is None  # v1 / classic slots: no court geometry
     assert len(list(build_feature_stream(_request(tmp_path), deps, None, None))) == 4
+
+
+def test_build_feature_stream_hands_netline_geometry_to_the_sink(tmp_path, monkeypatch):
+    """v2 net-line runs compute the court geometry for the slots; the player sink gets
+    the same object (serve side) without the feature stream changing."""
+    from rallyclip_engine import models as engine_models
+    from rallyclip_engine.models import PlayerRecordSink, build_feature_stream
+
+    class FakePose:
+        def __init__(self, **kw):
+            pass
+
+        def iter_pose_frames(self, **kw):
+            assert "crop_window" in kw  # geometry present -> far-court crop pass requested
+            yield {"boxes": np.zeros((0, 4), np.float32)}
+
+    class FakePre:
+        def __init__(self, **kw):
+            pass
+
+        def compute_court_mask(self, vp):
+            return "MASK", {}
+
+        def _source_frame_shape(self, vp):
+            return (1080, 1920, 3)
+
+        def iter_slot_players(self, pose_stream, mask, w, h, geometry):
+            seen["slots_geometry"] = geometry
+            for _fd in pose_stream:
+                yield 0, {"near": None, "far": None}
+
+    seen = {}
+    geom = object()
+    monkeypatch.setattr(engine_models, "_court_geometry", lambda request, cfg, size: geom)
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(json.dumps({"feature_pipeline": {"feature_set": "v2_nearfar", "slot_mode": "netline"}}),
+                        encoding="utf-8")
+    deps = _deps()
+    deps.PoseExtractor, deps.DataPreprocessor = FakePose, FakePre
+    req = _request(tmp_path, manifest_path=manifest)
+    req = dataclasses.replace(req, feature_set="v2_nearfar", screen_width=1920, screen_height=1080)
+    sink = PlayerRecordSink()
+    list(build_feature_stream(req, deps, None, None, player_sink=sink))
+    assert seen["slots_geometry"] is geom and sink.geometry is geom and len(sink) == 1
 
 
 def test_run_result_payload_player_keys_only_when_present():

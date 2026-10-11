@@ -34,10 +34,12 @@ Heuristics (documented, deliberately simple; appearance features replace them la
   scale-free body signature of the near player, and serve-side continuity (the server
   side is the SAME across a changeover and FLIPS across the other game boundaries).
 * ``serve_consistency`` - label-free sanity metric on the server sequence.
-* ``analyze_points`` - all of the above, one dict per point (the ``_points.json`` rows).
+* ``analyze_points`` - all of the above plus the serve side (deuce / ad; ``analysis.serve_side``),
+  one dict per point (the ``_points.json`` rows).
 """
 from __future__ import annotations
 
+import json
 import math
 import warnings
 from dataclasses import asdict, dataclass
@@ -221,7 +223,10 @@ class PlayerTracks:
     (``"shipped"``; v0.5.0 footage: almost always absent; v0.6.0 net-line slots: the
     far-court crop pass), with frames it misses filled from ``raw`` detections by
     ``pick_far_player`` when those are available (``"raw"`` if the shipped record is
-    empty, else ``"shipped+raw"``)."""
+    empty, else ``"shipped+raw"``).
+
+    ``geometry``: the run's court geometry dict (``homography_px_to_m`` in reference
+    pixels; npz key ``geometry_json``), used by ``analysis.serve_side``; None if absent."""
 
     timestamps: np.ndarray  # (n,) seconds in source time
     fps: float
@@ -231,6 +236,7 @@ class PlayerTracks:
     shipped_far: Optional[SideTrack] = None
     raw: Optional[RawDetections] = None
     far_source: str = "shipped"
+    geometry: Optional[Dict[str, Any]] = None
 
     def with_raw(self, raw: Optional[RawDetections], cfg: "PlayerAnalysisConfig" = None) -> "PlayerTracks":
         """Attach raw detections and fill the far player from them (no-op for None).
@@ -256,7 +262,7 @@ class PlayerTracks:
         else:
             far, source = picked, "raw"
         return PlayerTracks(self.timestamps, self.fps, self.near, far, self.ref_size,
-                            shipped_far=shipped, raw=raw, far_source=source)
+                            shipped_far=shipped, raw=raw, far_source=source, geometry=self.geometry)
 
     def __len__(self) -> int:
         return int(self.timestamps.shape[0])
@@ -276,7 +282,8 @@ class PlayerTracks:
     @classmethod
     def from_arrays(cls, data: Mapping[str, Any]) -> "PlayerTracks":
         """From the dump/npz key layout: ``{near,far}_{box,kp,kpconf,present}``,
-        ``timestamps``, ``fps``, ``ref_size``. Missing player keys -> absent side."""
+        ``timestamps``, ``fps``, ``ref_size``, optional ``geometry_json``. Missing player
+        keys -> absent side."""
         timestamps = np.asarray(data["timestamps"], dtype=np.float64).reshape(-1)
         n = timestamps.shape[0]
         fps = float(np.asarray(data["fps"]).reshape(())) if "fps" in data else (
@@ -293,7 +300,14 @@ class PlayerTracks:
                 present=np.asarray(data[f"{side}_present"], dtype=bool).reshape(n),
             )
         ref = tuple(int(v) for v in np.asarray(data["ref_size"]).reshape(-1)[:2]) if "ref_size" in data else (1280, 720)
-        tracks = cls(timestamps=timestamps, fps=fps, near=sides["near"], far=sides["far"], ref_size=ref)
+        geometry = None
+        if "geometry_json" in data:
+            try:
+                geometry = json.loads(str(np.asarray(data["geometry_json"]).reshape(())))
+            except ValueError:
+                geometry = None
+        tracks = cls(timestamps=timestamps, fps=fps, near=sides["near"], far=sides["far"], ref_size=ref,
+                     geometry=geometry if isinstance(geometry, dict) else None)
         if all(k in data for k in RAW_KEYS):
             k = np.asarray(data["raw_boxes"]).shape[1]
             raw = RawDetections(
@@ -321,9 +335,11 @@ class PlayerTracks:
         start_time: float = 0.0,
         ref_size: Tuple[int, int] = (1280, 720),
         raw: Optional[RawDetections] = None,
+        geometry: Optional[Dict[str, Any]] = None,
     ) -> "PlayerTracks":
         """From in-engine kept-frame records (one near/far dict-or-None per frame);
-        ``raw`` (pre-court-filter detections, same frames) enables ``pick_far_player``."""
+        ``raw`` (pre-court-filter detections, same frames) enables ``pick_far_player``;
+        ``geometry`` = the court geometry dict (serve side)."""
         if len(near_players) != len(far_players):
             raise ValueError("near/far record counts differ")
         n = len(near_players)
@@ -334,6 +350,7 @@ class PlayerTracks:
             near=pack_player_records(near_players),
             far=pack_player_records(far_players),
             ref_size=(int(ref_size[0]), int(ref_size[1])),
+            geometry=geometry,
         )
         return tracks.with_raw(raw)
 
@@ -345,7 +362,7 @@ class PlayerTracks:
             self.raw.boxes[:n], self.raw.kp[:n], self.raw.kpconf[:n], self.raw.box_conf[:n], self.raw.count[:n])
         return PlayerTracks(self.timestamps[:n], self.fps, cut(self.near), cut(self.far), self.ref_size,
                             shipped_far=None if self.shipped_far is None else cut(self.shipped_far),
-                            raw=raw, far_source=self.far_source)
+                            raw=raw, far_source=self.far_source, geometry=self.geometry)
 
     def to_arrays(self) -> Dict[str, np.ndarray]:
         out: Dict[str, np.ndarray] = {
@@ -363,6 +380,8 @@ class PlayerTracks:
             out[f"{side}_present"] = np.asarray(s.present, dtype=bool)
         if self.raw is not None:
             out.update(self.raw.to_arrays())
+        if self.geometry is not None:
+            out["geometry_json"] = np.asarray(json.dumps(self.geometry))
         return out
 
     def save_npz(self, path: Union[str, Path], **extra: Any) -> Path:
@@ -922,10 +941,25 @@ def analyze_points(
     points: Sequence[PointLike],
     tracks: PlayerTracks,
     cfg: PlayerAnalysisConfig = DEFAULT_CONFIG,
+    *,
+    geometry: Any = None,
+    game_ids: Optional[Sequence[Optional[int]]] = None,
+    score_confidence: Optional[float] = None,
+    serve_cfg: Any = None,
 ) -> List[Dict[str, Any]]:
     """One dict per point: start_s, end_s, server, server_confidence, server_id,
     near_id, far_id, identity_confidence, side_change_before, near_present_frac,
-    far_present_frac. JSON-serialisable."""
+    far_present_frac, plus the serve-side fields ``analysis.serve_side.ROW_KEYS``
+    (serve_side, serve_side_confidence, serve_side_source, serve_side_score,
+    serve_side_agree, serve_side_visual*). JSON-serialisable.
+
+    Serve side: visual from ``geometry`` (default ``tracks.geometry``; None -> no visual
+    side); score parity from ``game_ids`` (per-point game index from a winners list /
+    scoreboard, confidence ``score_confidence`` or the config's ``score_confidence``),
+    else from the detected server_id sequence via ``analysis.score`` segmentation
+    (``segmentation_confidence``)."""
+    from analysis.serve_side import DEFAULT_SERVE_SIDE_CONFIG, game_ids_from_servers, serve_sides
+
     bounds = [_point_bounds(p) for p in points]
     cache: Dict[str, Optional[np.ndarray]] = {}
     servers = [detect_server(b, tracks, cfg, _foot_cache=cache) for b in bounds]
@@ -950,15 +984,28 @@ def analyze_points(
             "near_present_frac": round(near_frac, 3),
             "far_present_frac": round(far_frac, 3),
         })
+    scfg = serve_cfg or DEFAULT_SERVE_SIDE_CONFIG
+    if game_ids is None:
+        game_ids = game_ids_from_servers([r["server_id"] for r in rows])
+        if score_confidence is None:
+            score_confidence = scfg.segmentation_confidence
+    sides = serve_sides(bounds, tracks, tracks.geometry if geometry is None else geometry, servers,
+                        game_ids, score_confidence=score_confidence, cfg=scfg)
+    for row, side in zip(rows, sides):
+        row.update(side)
     return rows
 
 
 def points_document(rows: Sequence[Mapping[str, Any]], cfg: PlayerAnalysisConfig = DEFAULT_CONFIG) -> Dict[str, Any]:
-    """The ``<output_name>_points.json`` payload: rows + consistency + side changes."""
+    """The ``<output_name>_points.json`` payload: rows + consistency + side changes +
+    the serve-side cross-check (``analysis.serve_side.cross_check``)."""
+    from analysis.serve_side import cross_check
+
     return {
         "schema": POINTS_SCHEMA,
         "points": list(rows),
         "consistency": serve_consistency(rows),
+        "serve_side_check": cross_check(rows),
         "side_changes_s": [r["start_s"] for r in rows if r.get("side_change_before")],
         "config": asdict(cfg),
     }

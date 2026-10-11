@@ -61,9 +61,11 @@ _RAW_POSE_KEYS = ("boxes", "keypoints", "conf", "box_conf")
 
 class PlayerRecordSink(list):
     """Opt-in player tee target: one (near, far, raw_pose_frame) per kept frame.
-    ``raw_scale`` maps the raw (source-pixel) detections to the reference frame."""
+    ``raw_scale`` maps the raw (source-pixel) detections to the reference frame;
+    ``geometry`` is the run's court geometry (net-line slots), None without one."""
 
     raw_scale = (1.0, 1.0)
+    geometry = None
 
 
 def _tee_pose_frames(pose_stream, holder: dict):
@@ -216,11 +218,13 @@ def build_feature_stream(
     if player_sink is not None:
         holder = {}
         pose_stream = _tee_pose_frames(pose_frames, holder)
-        if isinstance(player_sink, PlayerRecordSink) and src_width and src_height:
-            player_sink.raw_scale = (
-                float(request.screen_width) / float(src_width),
-                float(request.screen_height) / float(src_height),
-            )
+        if isinstance(player_sink, PlayerRecordSink):
+            player_sink.geometry = geometry  # serve side (deuce/ad) needs the court homography
+            if src_width and src_height:
+                player_sink.raw_scale = (
+                    float(request.screen_width) / float(src_width),
+                    float(request.screen_height) / float(src_height),
+                )
     if feature_set != "v1":
         slot_stream = pre.iter_slot_players(pose_stream, court_mask, src_width, src_height, geometry)
         if player_sink is not None:
@@ -532,12 +536,14 @@ class HeatmapHybridModel(AnalysisModel):
     def _write_player_outputs(self, result: RunResult, tracks) -> RunResult:
         """Opt-in Phase 1 outputs next to the segments CSV: ``<name>_players.npz``
         (dump-compatible: pointness/start/end tracks + near/far players) and
-        ``<name>_points.json`` (analysis.players.points_document). Never fails the run:
+        ``<name>_points.json`` (analysis.players.points_document; serve side from the
+        sink's court geometry, saved as ``geometry_json``). Never fails the run:
         on error the diagnostics carry ``player_analysis_error`` instead."""
         request = self.request
         diagnostics = dict(result.diagnostics)
         try:
             from analysis.players import PlayerTracks, RawDetections, analyze_points, points_document
+            from analysis.serve_side import geometry_to_dict
 
             np = self.deps.np
             records = getattr(self, "_player_records", None) or []
@@ -557,6 +563,7 @@ class HeatmapHybridModel(AnalysisModel):
                 start_time=float(request.start_time),
                 ref_size=(int(request.screen_width), int(request.screen_height)),
                 raw=raw,
+                geometry=geometry_to_dict(getattr(records, "geometry", None)),
             )
             base_name = request.output_name or request.video_path.stem
             out_dir = Path(request.csv_output_dir)
