@@ -1,9 +1,11 @@
 # RallyClip decode profile: Japanese junior matches labelled with beta-tennis tdproj
-# (fixed rear camera, 1080p60). Values re-measured for the v0.6.0 artifact
-# (rallyclip_v0.6.0, heatmap_hybrid) on beta-tennis 2R: point F1 (IoU>=0.5) 0.83 with
-# the manifest defaults -> 0.925 with this profile. (The v0.5.0 profile was
-# threshold 0.65 / hybrid_min_duration_sec 1.0 / end_pad_sec 1.6; on v0.6.0 the higher
-# threshold no longer helped.) See docs/DECISIONS.md and docs/PROGRESS.md.
+# (fixed rear camera, 1080p60). Values re-measured 2026-10-12 for the v0.6.0 artifact
+# (rallyclip_v0.6.0, heatmap_hybrid) with the upscaled far-court crop on all five
+# beta-tennis matches (1R/2R/3R/SF/P1R): mean point F1 (IoU>=0.5) 0.830 with the
+# manifest defaults -> 0.903 with this profile (merged points 38 -> 11 vs the previous
+# threshold 0.5 / floor 1.0 profile, which fell to 0.827 once the far player was
+# observed). Grid: threshold 0.4-0.7 x floor {0,1,2} s, smooth 1.5, end pad 1.6.
+# See docs/DECISIONS.md and docs/PROGRESS.md.
 # Use: rallyclip --config configs/decode/jp-junior.toml --video ...
 # or merge the five decode keys into your own config.toml [run] section. Model
 # contract values (fps, imgsz, ...) still come from the manifest. All five keys are
@@ -14,14 +16,15 @@
 write_csv = true
 segment_video = true
 
-# Pointness threshold (= the v0.6.0 manifest value).
-threshold = 0.5
+# Pointness threshold (manifest: 0.5). With the far player observed, pointness stays
+# high between points; 0.5 merges neighbouring points.
+threshold = 0.7
 # Pointness smoothing (= the v0.6.0 manifest value).
 smooth_sigma_frames = 1.5
 # No gap merging (= the v0.6.0 manifest value).
 merge_gap_sec = 0.0
 # Post-merge duration floor: the manifest's 4.0 s drops short real points
-# (aces, double faults, return errors) on this footage; 1.0 s keeps them.
-hybrid_min_duration_sec = 1.0
+# (aces, double faults, return errors) on this footage; 2.0 s keeps them.
+hybrid_min_duration_sec = 2.0
 # beta-tennis labels keep ~80 frames (1.33 s) after the point; pad ends to match.
 end_pad_sec = 1.6

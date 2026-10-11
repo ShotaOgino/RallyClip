@@ -151,10 +151,10 @@ def test_config_defaults_lists_decode_presets(client):
         assert preset["label"] and preset["description"]
     assert by_id["default"]["params"] == {}
     assert by_id["jp-junior"]["params"] == {
-        "threshold": 0.5,
+        "threshold": 0.7,
         "smooth_sigma_frames": 1.5,
         "merge_gap_sec": 0.0,
-        "hybrid_min_duration_sec": 1.0,
+        "hybrid_min_duration_sec": 2.0,
         "end_pad_sec": 1.6,
     }
 

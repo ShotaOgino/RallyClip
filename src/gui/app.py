@@ -1564,14 +1564,15 @@ DECODE_PRESETS: Dict[str, Dict[str, Any]] = {
     "jp-junior": {
         "label": "日本ジュニア（固定後方カメラ）",
         "description": (
-            "Japanese junior matches, fixed rear camera: keeps short points "
-            "(1 s duration floor instead of 4 s) and pads ends 1.6 s."
+            "Japanese junior matches, fixed rear camera: stricter pointness "
+            "threshold (0.7, fewer merged points), keeps short points (2 s "
+            "duration floor instead of 4 s) and pads ends 1.6 s."
         ),
         "params": {
-            "threshold": 0.5,
+            "threshold": 0.7,
             "smooth_sigma_frames": 1.5,
             "merge_gap_sec": 0.0,
-            "hybrid_min_duration_sec": 1.0,
+            "hybrid_min_duration_sec": 2.0,
             "end_pad_sec": 1.6,
         },
     },

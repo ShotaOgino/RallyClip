@@ -413,20 +413,20 @@ def test_normalize_config_resolves_decode_preset_and_explicit_keys_win():
     jp = gui_app._normalize_config({"decode_preset": "jp-junior"})
     assert jp["decode_preset"] == "jp-junior"
     assert coerce_decode_overrides(jp) == {
-        "threshold": 0.5,
+        "threshold": 0.7,
         "smooth_sigma_frames": 1.5,
         "merge_gap_sec": 0.0,
-        "hybrid_min_duration_sec": 1.0,
+        "hybrid_min_duration_sec": 2.0,
         "end_pad_sec": 1.6,
     }
 
     mixed = gui_app._normalize_config(
-        {"decode_preset": "jp-junior", "threshold": 0.7, "merge_gap_sec": 0.4, "end_pad_sec": None}
+        {"decode_preset": "jp-junior", "threshold": 0.6, "merge_gap_sec": 0.4, "end_pad_sec": None}
     )
     assert coerce_decode_overrides(mixed) == {
-        "threshold": 0.7,  # explicit beats the preset's 0.5
+        "threshold": 0.6,  # explicit beats the preset's 0.7
         "smooth_sigma_frames": 1.5,
-        "hybrid_min_duration_sec": 1.0,
+        "hybrid_min_duration_sec": 2.0,
         "end_pad_sec": 1.6,  # None means "not set", so the preset value stays
         "merge_gap_sec": 0.4,  # explicit beats the preset's 0.0
     }
@@ -467,13 +467,13 @@ def test_upload_rejects_unknown_decode_preset_with_400():
         ({"decode_preset": "default"}, None),
         (
             {"decode_preset": "jp-junior"},
-            {"threshold": 0.5, "smooth_sigma_frames": 1.5, "merge_gap_sec": 0.0,
-             "hybrid_min_duration_sec": 1.0, "end_pad_sec": 1.6},
+            {"threshold": 0.7, "smooth_sigma_frames": 1.5, "merge_gap_sec": 0.0,
+             "hybrid_min_duration_sec": 2.0, "end_pad_sec": 1.6},
         ),
         (
             {"decode_preset": "jp-junior", "end_pad_sec": 0.5},
-            {"threshold": 0.5, "smooth_sigma_frames": 1.5, "merge_gap_sec": 0.0,
-             "hybrid_min_duration_sec": 1.0, "end_pad_sec": 0.5},
+            {"threshold": 0.7, "smooth_sigma_frames": 1.5, "merge_gap_sec": 0.0,
+             "hybrid_min_duration_sec": 2.0, "end_pad_sec": 0.5},
         ),
     ],
 )
