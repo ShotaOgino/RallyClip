@@ -444,3 +444,292 @@ data/labels/metric, not optimization.** Do not re-run these:
 
 **Next (not optimization): serve-convention label fix (§3b-ii) + absolute-time metric
 (§3b-iii).** All the above dead ends point there.
+
+---
+
+_The entries from here to the port entry were written in the exported v0.5.0 snapshot
+(`~/Documents/RallyClip-0.5.0`, not a git repo) and are carried over with the work in
+`feat/port-v050-analysis` (append-only: wording kept, v0.6.0 deltas flagged inline and in
+the port entry at the end)._
+
+## 2026-10-07 — GUI upload cap 2 GB -> 32 GB, served by the backend
+
+- **What:** `MAX_CONTENT_LENGTH` is now `gui.app.MAX_UPLOAD_BYTES` (default
+  32 GB, override `RALLYCLIP_MAX_UPLOAD_GB`). `/api/config/defaults` returns
+  `max_upload_bytes`; the frontend reads it for the drop-zone hint and the
+  client-side size check instead of its own hardcoded 2 GB. A 413 now returns
+  JSON (`{"error": ...}`) like every other API error.
+- **Why:** Real full-match phone/camera recordings are 2.5-8 GB (1080p60,
+  30-60 min). The 2 GB cap rejected every match in the user's labeled set.
+  werkzeug streams multipart uploads to disk, so the cap was never a memory
+  guard; it only needs to be a sanity bound.
+- **Rejected:** Removing the cap entirely (an accidental drop of a multi-TB
+  file would fill the disk); a path-based "open local file" API that skips the
+  upload copy (better long-term for the desktop shell, but a larger change
+  touching the WKWebView file picker and job dir semantics).
+
+## 2026-10-11 — beta-tennis GT = `.tdproj`; the -1.6 s end offset is a label convention
+
+- **What:** Real-match accuracy is scored against the human-confirmed `.tdproj`
+  (clips with `validation != "deleted"`, warm-up before the first clip ignored),
+  mirroring `beta-tennis/Swing/rally_service/eval/eval_vs_tdproj.py`, not the
+  `_segments.csv`. The CSV's `last_value` carries an 80-frame (1.33 s) end margin
+  added by `3_update_csv.py`, so GT ends sit ~1.3-1.6 s after the real point end.
+  RallyClip's early ends are therefore not treated as a model defect; a constant
+  end pad is the matching fix if that convention is wanted.
+- **Why:** Last session's "ends 1.6 s early" would otherwise have pointed at
+  retraining. The offset is tight and constant on both matches, and the margin is
+  explicit in the labeling pipeline.
+- **Rejected:** Retraining with later end labels; scoring against the padded CSV.
+
+## 2026-10-11 — Decode tuning tooling lives in `scripts/eval/`, tracks in `logs/eval/`
+
+- **What:** `scripts/eval/dump_heatmap_tracks.py` saves the TCN per-frame tracks
+  once per match; `scripts/eval/score_heatmap_decode.py` re-decodes and scores
+  offline. Track dumps go to gitignored `logs/eval/`.
+- **Why:** The previous session's scratch evaluator vanished with its scratchpad and
+  the re-extraction took hours of wall-clock. A decode sweep must not need pose.
+- **Rejected:** Keeping the scripts in the session scratchpad; committing the npz.
+
+## 2026-10-11 — Do not change the shipped `threshold` yet
+
+_(Decided on the v0.5.0 artifact; the v0.6.0 manifest's threshold is also kept.)_
+
+- **What:** `threshold` 0.65-0.7 (vs 0.5) halves fault+second-serve merges and lifts
+  point F1 by 0.08-0.11 on the two JJTT matches, but the default stays 0.5.
+- **Why:** Two matches, same player/venue; the manifest value is also what the
+  golden fixture was generated with. Heatmap params currently have no config/CLI
+  override, so the first code change should be an override path, then a wider sweep.
+- **Rejected:** Editing `models/rallyclip_v0.5.0/manifest.json` now (breaks golden
+  parity silently); lowering the threshold (makes merging worse).
+
+## 2026-10-11 — Heatmap decode overrides via `RunRequest.decode_params`; `end_pad_sec` decode knob
+
+- **What:** `threshold`, `merge_gap_sec`, `smooth_sigma_frames`,
+  `hybrid_min_duration_sec`, `end_pad_sec` are overridable per run (CLI flag ->
+  config.toml `[run]` -> manifest). The CLI/GUI pass only explicitly-set keys in a
+  new optional `RunRequest.decode_params` (default None); `HeatmapHybridModel._decode_config`
+  merges them over the manifest `postprocess.params`. One validator
+  (`rallyclip_core.contracts.coerce_decode_overrides`) serves CLI (SystemExit) and
+  `/api/upload-and-start` (400). New `HeatmapDecodeConfig.end_pad_sec` (default 0)
+  extends ends after merge (hybrid: after the duration floor), re-merges
+  touch/overlap only, clamps to the last timestamp. Classic pipeline ignores all of it.
+- **Why:** Eval wants threshold 0.65-0.7 and a +1.3-1.6 s end pad for beta-tennis
+  labels without editing the shipped manifest (golden parity) or forking an
+  artifact. Unset keys resolve to nothing (not to the manifest value) so a classic
+  artifact without these manifest keys never crashes and default runs stay
+  byte-identical (`decode_params=None`).
+- **Rejected:** Typed per-knob `RunRequest` fields (every new decode knob would
+  touch contracts + CLI + GUI); resolving overrides to manifest values in the CLI via
+  `_resolve_mutable` (crashes on classic manifests, which lack heatmap keys);
+  re-merging padded segments with `merge_gap_sec` (pad would silently widen the merge
+  budget); applying the pad before the duration floor (pad would rescue short
+  false positives); negative pads (trimming can invert segments; rejected as out of range).
+
+## 2026-10-11 — jp-junior decode profile: threshold 0.65, hybrid_min_duration_sec 1.0, end_pad_sec 1.6
+
+_(v0.5.0 artifact values; on this branch superseded by the v0.6.0 values in the port entry below.)_
+
+- **What:** For Japanese junior matches labelled with beta-tennis tdproj, the
+  recommended per-run overrides are `threshold 0.65`, `hybrid_min_duration_sec 1.0`,
+  `end_pad_sec 1.6` (mean point F1 over 1R/2R/3R/SF 0.80 -> 0.885; time-F1 ~0.85 ->
+  0.87-0.92). Shipped manifest defaults are unchanged; the profile is applied through
+  the new override path (config.toml / CLI / API).
+- **Why:** 0.7 scores the same mean but doubles SF's pure false positives (12) by
+  splitting between-point tails; 0.6 leaves twice the merges. A 1.0 s post-merge floor
+  removes the fragments that appear once the threshold rises. The end pad reproduces
+  the labeler's 80-frame margin.
+- **Rejected:** Changing `models/rallyclip_v0.5.0/manifest.json` (golden parity, and
+  the profile is label-convention specific); tuning `smooth_sigma_frames` /
+  `merge_gap_sec` (no measurable effect); retraining before Phase 0 ships.
+
+## 2026-10-11 — GUI decode presets are server-side data, chosen by id
+
+- **What:** `src/gui/app.py::DECODE_PRESETS` defines named decode profiles
+  (`default` = no overrides; `jp-junior` = the tuned profile, see the jp-junior entries)
+  with a label and one-line description.
+  `GET /api/config/defaults` lists them as `decode_presets`; `POST /api/upload-and-start`
+  accepts `decode_preset` in its config, resolves it server-side in `_normalize_config`,
+  then lets explicit per-key decode values in the same request win. Unknown id -> 400.
+  The resolved id stays in the job config (`analysis_job.json`); library `meta.json`
+  is unchanged (it records no analysis params today). The frontend shows a
+  "Decode preset" select in Advanced settings with the description as helper text,
+  remembers the choice in localStorage, and hides the control when an older backend
+  omits `decode_presets`.
+- **Why:** The jp-junior profile measurably helps beta-tennis matches, and GUI users
+  had no way to apply it (API-only). Keeping presets on the server keeps one source
+  for API clients and the UI and preserves the "all GUI behavior via /api/*" invariant;
+  a test pins jp-junior to `configs/decode/jp-junior.toml` so CLI and GUI can't drift.
+  `default` sends no params, so default GUI runs stay manifest-only.
+- **Rejected:** Per-key numeric inputs in the UI (five unlabeled knobs invite
+  untested combinations; the preset is the tuned unit); hardcoding presets in
+  `script.js` (UI and API would drift, and non-browser clients couldn't discover them);
+  reading `configs/decode/*.toml` at runtime (not shipped in the PyInstaller bundle);
+  putting `decode_preset` in `DEFAULT_CONFIG` (the frontend spreads defaults into every
+  upload, which would make the server default sticky).
+
+## 2026-10-11 — Score state machine + server-sequence check (Phase 4, label-free part)
+
+- **What:** `src/analysis/score.py` (standard library only, outside the runtime path):
+  `MatchFormat` presets (bo3, bo3-mtb10, bo1, bo5; ad / no-ad; first server), an
+  immutable `ScoreState` with `advance(state, winner)` (deuce/AD, no-ad deciding point,
+  tiebreak with the 1-2-2 service rotation and ends every 6 points, ends after every
+  odd game of a set, server alternating across sets with a tiebreak counted as one
+  game, 10-point match tiebreak in lieu of the deciding set), `reconstruct` (per point)
+  and `reconstruct_games` (per game), `infer_first_server_and_check` (Phase 1 eval
+  hook), and beta-tennis winner-CSV readers. `scripts/eval/reconstruct_score.py` wraps it.
+  Players are only "A"/"B"; the near/far mapping stays with Phase 1 (`sides` is a parity
+  flag "same"/"swapped").
+- **Why:** Once point winners exist (ball/outcome work, scoreboard OCR or a human),
+  the score timeline, the server of every point and the change-of-ends points follow
+  deterministically, and the same rules give a label-free check of a detected server
+  sequence. With winners unknown, game boundaries are placed by an O(N x max_game_points)
+  dynamic programme (games of 4..30 points, server constant within a game, alternating
+  across games; partial last game allowed) that minimises disagreements; both first
+  servers are tried (A wins ties). With winners known, the exact replay is used,
+  tiebreak rotation included.
+- **Finding:** TrimDeck `*_winner.csv` rows are GAME events (`gameEvents.gameWinner`),
+  not points, and `score_after` is games summed over the match ("12-6" = 6-0 6-6), so
+  the reader auto-detects the unit and accepts either per-set or cumulative strings.
+  winner code 0 = "A" (TrimDeck team0, named from `winner_name`).
+- **Rejected:** Tracking near/far identity here (Phase 1's job; keeps this module pure);
+  modelling tiebreaks in the unknown-winners DP (needs point winners to know when 6-6
+  is reached; a tiebreak shows up as one long mixed-server game and costs a few
+  disagreements); an HMM/probabilistic decoder (the min-disagreement DP is exact and
+  explainable; revisit when detector confidences exist); a third-party tennis-scoring
+  package (stdlib-only keeps it vendorable into any worker).
+
+## 2026-10-11 — Phase 2 first cut: rule-based shot events + stroke type, label-free
+
+- **What:** `src/analysis/shots.py` (numpy only, outside the runtime path) detects swing
+  events per player from the 5 fps pose dump (wrist speed relative to the mid-shoulder
+  point, in body scales/s; per-step L/R swap repair; threshold
+  `max(6 bs/s, median + 1.0 * 1.4826 * MAD)` per point; bounded prominence; 0.6 s
+  refractory; parabolic peak time), classifies serve / overhead / volley / forehand /
+  backhand / unknown with documented pose rules, and merges both sides with the rally
+  alternation prior (opposite-side overlap < 0.4 s deduped, same-side events < 1.5 s
+  apart collapsed to the faster, a prior serve / prior opponent shot inserted where
+  alternation breaks; prior events are counted separately). Sanity tooling:
+  `scripts/eval/score_shots.py` (label-free report) and `scripts/eval/export_shot_clips.py`
+  (1.2 s clips + `labels_template.csv` for human stroke labels).
+- **Why:** No stroke labels exist, so a learned classifier cannot be trained or evaluated
+  yet; a transparent rule baseline gives rally length / serve / stroke-mix numbers now,
+  drives the labelling tool (pre-filled predictions), and becomes the baseline the
+  learned model must beat. Choices measured on beta-tennis 2R (tdproj points): the
+  signal is the faster of the two wrists, not the dominant one, because the two wrists'
+  95th-percentile speeds differ by only 6 % there (a camera side holds two players across
+  change-overs; YOLO L/R labels swap on ~1-2 % of steps); `rel_k` 3 -> 1 plus a
+  prominence test recovered the slower swings of one player (threshold had been 11 bs/s
+  while real swings peaked at 9-11) while keeping running ripples out; same-side gap
+  1.0 -> 1.5 s because serve toss + contact read as two swings ~1.0 s apart; overhead
+  margin 0.15 -> 0.8 body scales (serves sit at >= 0.9; follow-throughs at 0.2-0.6); the
+  pre-peak sample decides forehand/backhand (the post-peak sample is the follow-through,
+  which crosses the body for both).
+- **Far player:** the shipped preprocessor's near-court mask drops the far player before
+  assignment (2R: `far_present` 7 / 10300 frames). The preprocessor is not changed; the
+  dump now also saves raw pre-filter detections, and `score_shots.py` rebuilds a far
+  track from them with a script-private heuristic (`_far_from_raw`) until Phase 1's
+  `analysis.players` owns that choice.
+- **Rejected:** a learned stroke classifier (TCN on normalised keypoints) before labels
+  exist (nothing to fit or score it on; the roadmap keeps it for after ~2k labels);
+  dominant-arm-only signal (not identifiable from labels at this resolution);
+  wiring shots into the engine / CLI / GUI now (joined with Phase 1 later; no runtime
+  path changes, golden parity untouched); changing the preprocessor's far-player filter
+  (runtime behaviour and golden parity).
+
+## 2026-10-11 — Phase 1 first cut: near-player-first server + A/B identity heuristics
+
+- **What:** `src/analysis/players.py` (numpy only): `detect_server` = near player's
+  wrist above the head with the arm extended (>= 0.7 torso lengths from the shoulder) in
+  [start - 1.0, start + 2.5] s -> near serves; near clearly seen (arm keypoints valid in
+  >= 70 % of the window) and never reaching overhead -> far serves by elimination (fixed
+  confidence 0.3). `track_identities`: A = near player of point 1; each boundary with a
+  gap >= 25 s scores 0.5 x gap (0 at 35 s, 0.6 at 60 s, 1 at >= 90 s) + 0.2 x near body
+  signature change (median log limb-length ratios, scale-free) + 0.3 x serve-side
+  continuity (+1 same side, -1 flip); >= 0.5 flips the ids. Engine opt-in
+  `RunRequest.save_player_tracks` (default False, golden byte-equal) tees kept-frame
+  near/far + raw pose frames and writes `<name>_players.npz` (dump-compatible) +
+  `<name>_points.json`; CLI `--players`; GUI jobs always on, served at
+  `/api/library/<id>/points`.
+- **Why:** The far player is not detected by the shipped 960-px pose pass on beta-tennis
+  (far present 5-22 frames per match out of 10-19k; raw pre-court-filter detections
+  contain no far-court person either), so every decision has to come from the near
+  player. Serve-side continuity is the key structural cue: a change of ends keeps the
+  server on the same side (the new server stands where the old one did), while a game
+  boundary without a change flips it. Evaluated against a reference derived from the
+  tdproj scoreboard (game ends + gameWinner + format + initialServer): ends change after
+  the 1st, 3rd, ... game OF EACH SET, so a 5-game short set (4-1) is followed by two
+  changes in a row; the "cumulative odd games" shortcut was wrong and made 1R look like
+  77 % server accuracy until fixed. Results (tdproj points): server 0.986 / 0.982 / 0.987
+  / 1.0 / 0.968 (1R/2R/3R/SF/P1R), identity 1.0 x 4 and 0.968, side changes P 1.0,
+  R 1.0 except P1R 7/8 (tiebreak); on jp-junior decoded points, matched to GT: server
+  0.965-1.0, identity 0.977-1.0. Parameters were set from first principles and checked
+  on 2R before the other matches were dumped; no grid search.
+- **Rejected:** a court homography (not needed for side/serve; deferred); identity from
+  gaps alone (non-changeover game breaks reach 100-160 s on 1R/2R/3R); a far-player
+  raise as the primary far-serve signal (no far detections); confidence as a product of
+  linear margins (collapsed to ~0.01 by the end of a match even when every decision was
+  right -> logistic per-decision confidence, still multiplicative); changing the
+  preprocessor's near-court filter (shipped feature contract + golden parity).
+
+## 2026-10-11 — Far player needs v0.6.0's crop pass, upscaled; recommend v0.6.0 as the base
+
+- **What:** The shipped v0.5.0 pose pass (YOLOv8n-pose at imgsz 960 on 1080p) does
+  not detect the far player on the customer's footage (40-55 px tall); raw pre-filter
+  detections contain a second person in ~2% of frames. Phases 1/2 were therefore
+  built near-player-first. Upstream `feat/runtime-v060` (court-line homography +
+  far-court crop pass + net-line slots) was cloned to `~/Documents/RallyClip-v060`
+  and evaluated on 2R: geometry fits, point detection is equal or better, but the
+  native-scale crop still finds the far player in only ~2% of in-point frames; a 2x
+  upscaled crop finds them in 4 of 6 test frames. A geometry-driven upscaled crop is
+  being prototyped on a local branch there. Recommendation to the user: adopt v0.6.0
+  as the base and port this snapshot's work onto a fork.
+- **Why:** Everything above Phase 1 (far strokes, outcomes) needs the far player;
+  re-implementing crop + homography on v0.5.0 would duplicate upstream.
+- **Rejected:** Lowering YOLO conf (tested 0.1: no gain); relying on the alternation
+  prior for far shots long-term; building our own homography on v0.5.0.
+
+## 2026-10-11 — Port the v0.5.0 snapshot work onto `feat/runtime-v060` (fork `ShotaOgino/RallyClip`)
+
+- **What:** v0.6.0 is the base (user decision). The snapshot's uncommitted work (decode
+  overrides + `end_pad_sec`, GUI decode presets, 32 GB upload cap, `scripts/eval/`,
+  `src/analysis/` + the opt-in player outputs) lands as `feat/port-v050-analysis`,
+  branched from `origin/feat/runtime-v060`, ported by 3-way cherry-pick from a local
+  commit on `v0.5.0` (the snapshot's exact base) and resolved by hand. Deltas vs v0.5.0:
+  1. **jp-junior = threshold 0.5, smooth_sigma_frames 1.5, merge_gap_sec 0.0,
+     hybrid_min_duration_sec 1.0, end_pad_sec 1.6** (v0.6.0 2R point F1 0.83 default ->
+     0.925; the v0.5.0 profile's threshold 0.65 is not used). All five keys are explicit so
+     the profile does not move if the manifest's decode defaults change; the GUI preset
+     and `configs/decode/jp-junior.toml` stay test-pinned to each other. The only material
+     changes vs the v0.6.0 manifest are the 1.0 s floor (manifest 4.0 s drops short real
+     points) and the 1.6 s end pad (label convention).
+  2. **Player tee follows the v2 slot stream.** `build_feature_stream(player_sink=)` wraps
+     `DataPreprocessor.iter_slot_players` (`_tee_slot_players`) for v2 feature sets and the
+     v1 records (`_tee_player_records`) otherwise; raw pre-filter detections come from the
+     pose frame the preprocessor is on (`_tee_pose_frames`) in both. The eval dump tees the
+     same seams independently, so the engine npz can be checked against it (equal on the
+     golden clip).
+  3. **`PlayerTracks.with_raw` keeps the shipped far record per frame and fills only its
+     gaps** from `pick_far_player` (v0.5.0 replaced it wholesale). On v0.6.0 the shipped far
+     slot comes from the far-court crop pass and is the better source; v0.5.0 behaviour
+     is unchanged when the shipped far record is empty (`far_source == "raw"`).
+  4. **No 1280x720 assumption to remove:** every rule in `players.py` / `shots.py` is a
+     fraction of the frame or of a body/box size and `ref_size` is read from the dump /
+     request; only defaults (for old dumps without `ref_size`) and docstrings said 1280x720.
+  5. **`score_heatmap_decode.py` bases its sweep on the dump's own manifest params**
+     (fallback: the v0.5.0 values), so `{}` reproduces the run's decode on any artifact.
+  6. **`tests/fixtures/golden_cli/clip.tracks.npz` regenerated** from this branch's golden
+     clip with the ported dump (1 default segment, far present 36/120 frames, ref
+     1920x1080, `savez_compressed`); the golden-tracks shot test now expects motion shots
+     on both sides.
+  7. **Upload cap:** `feat/runtime-v060` still had 2 GB, so the 32 GB cap is ported as-is.
+     Upstream PR #60 (open, against `main`) removes the cap entirely; reconcile when either
+     lands.
+- **Why:** v0.6.0 brings the court homography and the far-court crop pass that every phase
+  above point detection needs (the far player is invisible to the v0.5.0 pose pass);
+  porting semantics rather than patches keeps the default path byte-identical (golden clip
+  CSV equal to unmodified `feat/runtime-v060` on this machine).
+- **Rejected:** carrying the v0.5.0 jp-junior numbers over (tuned on the other model; on
+  v0.6.0 the threshold change no longer helps); re-deriving the far player only from raw
+  full-frame detections on v0.6.0 (discards the crop pass); reusing the engine sink inside
+  the dump script (loses the independent cross-check); committing `logs/eval/` outputs.

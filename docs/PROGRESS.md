@@ -1,146 +1,82 @@
 # PROGRESS — overwrite me at every session end
 
-_Last updated: 2026-09-09 (session: assisted DMG update, Greptile cancel + checksum)._
+_Last updated: 2026-10-11 (session: port of the v0.5.0 snapshot work onto the v0.6.0
+runtime branch)._
 
-_Last updated: 2026-07-19 (session 2: pose contract landed; **YOLO26 reversed → YOLOv8 + CoreML** after ANE benchmarks; unified training_data root; normalize running)._
+## Repo state
 
-_Last updated: 2026-07-19 evening (session 2: v8 pose contract, unified data root,
-corpus extract, frozen split, classic retrain + benchmarks; e2e run in flight)._
+- Fork `ShotaOgino/RallyClip` (`origin`; `upstream` = `iroblesrazzaq/RallyClip`, read-only).
+  Branch **`feat/port-v050-analysis`**, branched from `origin/feat/runtime-v060` (9dd5ad1,
+  same as upstream). Worktree `~/Documents/RallyClip-v060-port`; the clone
+  `~/Documents/RallyClip-v060` holds a separate local branch `feat/far-crop-upscale`
+  (geometry-driven upscaled far crop, another agent, not pushed).
+- Commits on this branch:
+  - `08f2fe8` decode overrides + `end_pad_sec` + GUI decode presets (jp-junior) + 32 GB upload cap
+  - `7dc3723` `scripts/eval/` decode tooling (`dump_heatmap_tracks.py`, `score_heatmap_decode.py`)
+  - `fbee612` `src/analysis/` (players / shots / score) + opt-in player outputs (engine, CLI
+    `--players`, GUI always on, `/api/library/<id>/points`) + Phase 1/2/4 eval scripts + tests
+  - docs/features commit (this file, DECISIONS, REPO_MAP, testing, features.json, roadmap)
+- No PR opened (user decides). PR review would be Greptile only.
+- Env: worktree uv `.venv` (py3.12.7) from `uv sync --extra cpu --extra dev --extra train`
+  (the `[train]` extra is needed for the training test modules); `PY=.venv/bin/python`
+  (`uv run` rewrites `uv.lock`'s version line, don't commit that). Artifact
+  `models/rallyclip_v0.6.0/` copied from the clone (gitignored).
+- Default gate: **558 passed, 9 skipped, 38 deselected** (baseline before the port: 440
+  passed + 1 wall-clock preview-benchmark failure that only appears under machine load).
+  Compile gate exit 0. Golden parity 1 passed; golden clip CSV byte-identical to unmodified
+  `feat/runtime-v060` on this machine.
 
-_Last updated: 2026-07-20 (session 4: added the boundary-heatmap head e2e_heatmap;
-it is the new best model on both new_data and legacy. Session-3 court/loader work below
-is still uncommitted alongside it)._
+## What was ported (see DECISIONS 2026-10-11 "Port the v0.5.0 snapshot work")
 
-## Session 4 — boundary-heatmap head (NEW BEST MODEL)
+1. **Decode overrides**: CLI `--threshold --merge-gap-sec --smooth-sigma-frames
+   --hybrid-min-duration-sec --end-pad-sec`, config.toml `[run]`, `/api/upload-and-start`;
+   `RunRequest.decode_params` merged over the manifest in `HeatmapHybridModel._decode_config`.
+   `end_pad_sec` pads after merge + floor, re-merges touch/overlap, clamps.
+2. **Decode presets**: `DECODE_PRESETS` (default, jp-junior), `/api/config/defaults
+   .decode_presets`, `decode_preset` in upload config, frontend select (hidden if absent),
+   `configs/decode/jp-junior.toml`. **jp-junior on v0.6.0 = threshold 0.5,
+   smooth_sigma_frames 1.5, merge_gap_sec 0.0, hybrid_min_duration_sec 1.0, end_pad_sec 1.6.**
+3. **Upload cap 32 GB** (`MAX_UPLOAD_BYTES`, `RALLYCLIP_MAX_UPLOAD_GB`, JSON 413,
+   `max_upload_bytes`). `feat/runtime-v060` still had 2 GB; upstream PR #60 (open, vs
+   `main`) removes the cap entirely, so expect a conflict there.
+4. **`scripts/eval/`**: dump (v2: tees `iter_slot_players`; v1: `iter_build_features`; raw
+   pre-filter detections kept), decode scorer (base = dump's manifest params),
+   `analyze_players.py`, `score_shots.py`, `export_shot_clips.py`, `reconstruct_score.py`.
+   All run on the golden clip on this branch.
+5. **`src/analysis/`** + engine/CLI/GUI wiring. The player sink tees the v2 slot stream (near
+   from below the net, far from the crop pass, 1920x1080 reference). `PlayerTracks` keeps
+   the shipped far record per frame and fills gaps from the raw pick. Fixture
+   `tests/fixtures/golden_cli/clip.tracks.npz` regenerated on this branch.
+6. Docs: DECISIONS (snapshot entries carried over + port entry), REPO_MAP routes,
+   testing counts, features.json (`heatmap-decode-overrides`, `upload-cap-32gb`,
+   `phase1-player-identity`, `phase2-shot-events`, `phase4-score-reconstruction`),
+   `docs/service-roadmap-plan.md`.
 
-Added `train.head: e2e_heatmap` (twin startness/endness Gaussian heatmaps, BSN
-family) as new files only — no edits to the classic or e2e_seg code paths. Built
-after a critical review of the first plan changed four things: **hybrid decode**
-(pointness-runs define segments, heatmaps refine edges via soft-argmax) as the
-default instead of fragile peak-pair; **balanced-BCE** on the soft Gaussian as the
-default loss (focal opt-in); **peak-NMS + segment-merge** in the decoder; and a
-**val-swept** comparison (not a single default-param eval).
+Not ported: the snapshot's `logs/eval/` outputs (gitignored), its `.gstack/` ignore line,
+and its README / pyproject edits (none were part of the work).
 
-Result (val-swept, same 3 new_data + 3 legacy subsets as the other benches):
+## v0.6.0 numbers so far
 
-| Model | run_id | new_data test | Legacy test |
-|---|---|---|---|
-| classic, NO court | 20260719_165056 | 31.1% | 49.0% |
-| classic, WITH court | 20260720_court_classic | 37.1% | 31.3% |
-| e2e_seg, court | 20260720_court_e2e | 22.9% | 34.0% |
-| **heatmap, court (hybrid)** | **20260720_court_heatmap** | **42.2%** | **46.3%** |
-
-New best on new_data **and** recovers most of the legacy regression — only model strong on
-both at once. FN low (new_data 1.4%, legacy 13.9%): the hybrid decode preserved recall.
-Still overfits early (best epoch 2), bad_seg still ~29% (boundary precision is the
-residual error). New files: `models/heatmap_lstm.py`, `train/heatmap_loss.py`,
-`eval/heatmap_evaluator.py`, `train/heatmap_loop.py`; +tests `tests/test_heatmap_loss.py`
-(11, all pass; full suite 293 pass). Bench: `benchmarks/bench_court_heatmap.py`.
-Next levers: soft-argmax TIME loss term (currently shape-only), σ/focal sweep,
-shorter patience, serve-convention label fix (§3b-ii) before trusting exact numbers.
-
----
-
-_Session 3 notes (still current — court + loader work, all uncommitted):_
-
-Full handoff: `../../CHAT_HANDOFF.md`. Backlog + idea dump: `../../TODO.md`.
-Why-log: `docs/DECISIONS.md` (session-3 block dated 2026-07-20).
-
-- `main` has published app **v0.5.0**. Inference artifact stays
-  `artifact-rallyclip_v0.5.0`.
-- Active work: assisted update (`cursor/assisted-dmg-update-5f28`) as app **0.5.1**.
-- PR: https://github.com/iroblesrazzaq/RallyClip/pull/58
-
-## Session 2 (2026-07-19, later) — what shipped (uncommitted)
-
-## Git state
-
-Branch `feat/desktop-auto-update`. **9 files modified, UNCOMMITTED** (session-3 work):
-- `src/preprocessing/court_detector_impl.py` — manifest-aware `_load_yolo`; middle-
-  anchored outward-expanding `extract_clean_frame` + helpers (`_detect_person_boxes`,
-  `_boxes_to_mask`, `_quad_iou`, `_homography_to_base`); `process_video(target_time=None)`.
-- `src/preprocessing/data_preprocessor.py` — middle-first `_court_sample_times`; midpoint anchor.
-- `src/training/courts/cache.py` — `target_time` Optional (None=midpoint); multi-anchor retry; loud fail.
-- `src/training/dataset/hdf5_dataset.py` — **in-memory load** (6 GB guard). THE speedup.
-- `src/training/io/fingerprint.py` — `court_target_time` Optional → "middle" in hash.
-- `src/training/pipeline.py` — Optional court_target_time; post-preprocess court-health summary.
-- `src/training/preprocess/preprocessor.py` — Optional court_target_time; loud per-video no-mask warn.
-- `configs/train/base.yaml` — `court.target_time: null`.
-- `configs/train/holdout.yaml` — test set +`133663e7` (7 test videos now).
-
-1. Latest app release is the newest published `v*` tag from `/releases`.
-2. Frozen app downloads to a unique staging file, verifies SHA-256 (sidecar
-   must name the DMG), then replaces `~/Downloads`.
-3. `POST /api/update/cancel` stops the server-side transfer; the button
-   becomes Cancel.
-4. Source/GUI opens that release URL. App version **0.5.1**; ONNX stays
-   `models/rallyclip_v0.5.0`.
-5. Default gate: **321 passed, 6 skipped, 27 deselected**.
+- Golden clip (this branch): far player present in 36/120 kept frames (v0.5.0: 0); shots
+  report 2 near + 2 far motion swings in the one point.
+- beta-tennis 2R (measured in the v0.5.0 snapshot session with the v0.6.0 clone + a scratch
+  dump): court geometry OK (far baseline ~y400, net ~y465 in 1080p); point F1 (IoU>=0.5)
+  default 0.83 (v0.5.0 default 0.79); with threshold 0.5 / hybrid_min_duration_sec 1.0 /
+  smooth 1.5 / end pad 1.6: **0.925** (v0.5.0 jp-junior profile: 0.933). Far slot present in
+  664/10300 frames but only ~2% inside points; frame test: native-scale crop finds the far
+  player 1/6, 2x upscaled crop 4/6.
+- Phase 1/2/4 real-match numbers (server 0.97-1.0, identity 0.97-1.0 on 1R/2R/3R/SF/P1R) are
+  from v0.5.0 dumps; not re-run on v0.6.0 dumps yet.
 
 ## Next steps
 
-1. Greptile 5/5, then user merges.
-2. Tag `v0.5.1` (do not retag `v0.5.0`; do not re-upload the ONNX zip).
-
-**DONE (2026-07-19 pm):** normalize 27/27 → provenance layout
-(`../training_data/sources/` + flat interface layers; RallyClip/data deleted,
-dups removed) → norm= path tag in paths.py → **full corpus extract→preprocess→
-features complete: 27/27/27**, no skips, under
-`pose_data/norm=1280x720@5fps/yolo=yolov8n-960@4a3fe0de/conf=0p25/imgsz=960/`
-(extract via CoreML EP; run log `../training_data/pipeline_run.log`).
-
-- `a6c7e52` training: robust pipeline hardening + unified data layout
-- `7196b5b` extraction: manifest-defined pose backends (YOLOv8n contract)
-- `cd3f22f` docs: session decisions, progress, repo map updates
-- `2e732a1` train: fix e2e_seg launch (seg_head key, data-derived pos_weight)
-
-Prior local commits still unpushed: a6c7e52, 7196b5b, ecfe385, 2e732a1, d52084d.
-**Nothing committed this session** — tests pass (see below); commit when ready.
-
-## What happened this session
-
-1. **Found + fixed a corpus-wide silent failure**: court detection had been failing on
-   ALL videos (manifest handed to ultralytics). All prior training used NO court filter.
-2. **Court detector rewrite** (user spec): midpoint anchor, outward homography expansion
-   with IoU/person stop, multi-anchor retry, loud health reporting. 30/32 videos detect.
-3. **HDF5 loader fix**: gzip chunks (228,7,23) made per-item reads ~470 s/epoch; in-memory
-   load → ~30 s/epoch, bit-identical. Permanent speedup for all training.
-4. **Re-ran the corpus with court filtering** and retrained classic + e2e; benchmarked.
-5. **Added 3 new new_data videos earlier same day** → corpus 32 videos (133663e7→test, 59f28ea6
-   + b7009388→train).
-
-## Results (six-bin acceptable rate, each model val-swept; new_data subset = 3, legacy = 3)
-
-| Model | run_id | new_data test | Legacy test |
-|---|---|---|---|
-| v0.3.1 shipped | (bundled) | 12.9% | — |
-| classic, NO court | 20260719_165056 | 31.1% | 49.0% |
-| **classic, WITH court** | **20260720_court_classic** | **37.1%** | 31.3% |
-| e2e, court, patience 5 (best ep2) | 20260720_court_e2e | 22.9% | 34.0% |
-| e2e, court, patience 10 (best ep9) | 20260720_court_e2e_p10 | 19.3% | 10.2% |
-
-**Best model = classic + court (37.1% new_data).** Court filtering helped the new_data target domain
-(+6) but regressed legacy (−18, FN-driven) — confounded with the train-set change; user
-parked it (masks were legacy-tuned; new_data is the target). e2e underperforms and overfits
-early; longer patience didn't help (run variance > patience effect). Benchmark scripts +
-outputs in `../training_data/benchmarks/` (bench_court_classic.py, sweep_court_classic.py,
-bench_court_e2e.py, bench_court_e2e_p10.py).
-
-## Next (user's call — nothing running)
-
-1. Decide the working model: classic+court is the current best; commit the session's code.
-2. **Serve-convention label fix** (TODO §3b-ii) — poisons boundary supervision for any head.
-3. **Gaussian startness/endness heatmap head** (TODO §3c, user idea 2026-07-20) — soft
-   Gaussian boundary targets + soft-argmax decode; targets the persistent bad_seg failure.
-4. (Parked) legacy court-mask regression — cap far-court masking / isolate court-vs-train.
-5. Push branch / merge when a shippable artifact exists.
-
-## Ops notes
-
-- **Always wrap training in `caffeinate -ims`** — laptop sleep suspends (not kills) the
-  process; stacked restarts clobber the run dir.
-- Run: `cd RallyClip-perf && caffeinate -ims ~/anaconda3/bin/python train.py --config
-  base.yaml,data_container.yaml,holdout.yaml[,<overlay>] --steps <steps>`.
-- Force court recompute after a court change: `court.force: true` (cached npz is keyed by
-  video stem and reused otherwise). Tests: `~/anaconda3/bin/python -m pytest tests/ -q`
-  (282 pass minus heavy GUI/e2e).
+1. User: review the branch / decide on a PR to upstream (`feat/runtime-v060` or `main`).
+2. Re-dump the five beta-tennis matches with `scripts/eval/dump_heatmap_tracks.py` on this
+   branch (logs/eval/beta-tennis/v060/), confirm jp-junior on 1R/3R/SF/P1R (only 2R was
+   measured), and re-run `analyze_players.py` / `score_shots.py`.
+3. Far player: take the `feat/far-crop-upscale` result (upscaled, geometry-driven crop);
+   if far presence inside points >= 70%, re-run Phase 1/2 with far evidence (server by
+   observation, far strokes) and retire `score_shots.py::_far_from_raw`.
+4. Phase 2 labels: `export_shot_clips.py` on one match, label ~300 swings.
+5. Phase 1: tiebreak side changes (every 6 points, no gap).
+6. Widen the eval set beyond one player / venue.

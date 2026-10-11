@@ -16,7 +16,17 @@ equivalent alternative; `.venv-train` is what was verified 2026-07-03.)
 PYTHONPATH=src:tests $PY -m pytest -q -m "not slow and not e2e" -p no:cacheprovider
 ```
 
-Last known (2026-09-09, assisted DMG update, Linux py3.12):
+Last known (2026-10-11, `feat/port-v050-analysis` = v0.6.0 runtime + ported decode
+overrides / presets / upload cap / `src/analysis/` (+117 tests); shota Mac M3, worktree uv
+`.venv` py3.12.7 from `uv sync --extra cpu --extra dev --extra train`, `PY=.venv/bin/python`):
+**558 passed, 9 skipped, 38 deselected, ~46s**. The `[train]` extra (torch) is required:
+without it 8 training test modules fail at collection. Branch baseline before the port:
+440 passed + 1 failure of the wall-clock
+`test_gui_smoke.py::test_preview_window_generation_latency_benchmark` (fails only while
+other ffmpeg/CoreML jobs load the machine; passed in the 558 run). Golden parity 1 passed
+(CSV byte-identical to unmodified `feat/runtime-v060` on the same machine).
+
+Previous (2026-09-09, assisted DMG update, Linux py3.12):
 **321 passed, 6 skipped, 27 deselected, ~20s**. `tests/test_release_packaging.py` 21 passed;
 `tests/test_artifact_fetch.py` 6 passed.
 
@@ -56,6 +66,10 @@ No linter is configured in this repo (no ruff/flake8 config; CI doesn't lint).
 Repo-wide `ruff check src tests` (ruff 0.14.10, default rules) shows **23 pre-existing
 errors** (16 F401 unused-import, 5 F841, 1 E402, 1 F541) — legacy debt: not ours to
 fix, not a license to add new ones.
+
+Without a local ruff, `uvx ruff@0.14.10 check <files>` works (2026-10-11: the port's
+touched files add no findings over `feat/runtime-v060`; `scripts/eval/dump_heatmap_tracks.py`
+and `score_heatmap_decode.py` are `ruff format`-ed).
 
 **Scoped lint for new work** — lint only the files you touched:
 

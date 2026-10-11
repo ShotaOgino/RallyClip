@@ -10,21 +10,21 @@
       "name": "Default unit/contract suite (core purity, engine, api, cli, gui smoke, court deterministic, training units)",
       "status": "passing",
       "verification": "PYTHONPATH=src:tests $PY -m pytest -q -m \"not slow and not e2e\" -p no:cacheprovider",
-      "evidence": "2026-09-09: 321 passed, 6 skipped, 27 deselected (~20s) on cursor/assisted-dmg-update-5f28 (Linux py3.12). Cancel stops the Flask DMG download; sidecar checksums must name the selected DMG."
+      "evidence": "2026-10-11 (feat/port-v050-analysis, uv .venv py3.12.7 (--extra cpu --extra dev --extra train), shota Mac M3): 558 passed, 9 skipped, 38 deselected (46 s); branch baseline before the port was 440 passed + 1 wall-clock failure (test_preview_window_generation_latency_benchmark, fails only under concurrent ffmpeg/CoreML load). Commit 08f2fe8 alone: 470 passed + that same wall-clock failure. Training tests need the [train] extra (torch)."
     },
     {
       "id": "golden-cli-parity",
       "name": "CLI end-to-end golden parity on committed fixture clip (0.25s boundary tolerance)",
       "status": "passing",
       "verification": "PYTHONPATH=src:tests $PY -m pytest -q -p no:cacheprovider tests/test_cli_golden_parity.py",
-      "evidence": "2026-08-24: 1 passed after regenerating tests/fixtures/golden_cli/golden_segments.csv for TCN hybrid decode (two segments 3.753-11.964 and 13.040-23.449 vs classic v0.4.0 one 3.800-24.000)."
+      "evidence": "2026-10-11 (feat/port-v050-analysis, uv .venv py3.12.7 (--extra cpu --extra dev --extra train), shota Mac M3): 1 passed. Golden clip CSV from this branch is byte-identical to unmodified feat/runtime-v060 on the same machine (4.752,23.467; committed golden 4.867,23.466 from another machine, within the 0.5 s tolerance)."
     },
     {
       "id": "compileall",
       "name": "src+tests byte-compile cleanly",
       "status": "passing",
       "verification": "$PY -m compileall -q src tests",
-      "evidence": "2026-08-24: exit 0 on feat/v0.5.0-tcn"
+      "evidence": "2026-10-11 (feat/port-v050-analysis): compileall -q src tests scripts/eval exit 0."
     },
     {
       "id": "tcn-v050-default",
@@ -74,7 +74,42 @@
       "status": "passing",
       "verification": "See docs/artifact-registry-plan.md Definition of done: depth-1 clone has no models/**/*.onnx; fetch_artifact.py then golden/e2e; CI fetch; PyInstaller bundle still contains v0.5.0 weights; packaged app does not download at launch.",
       "evidence": "2026-09-07: Published https://github.com/iroblesrazzaq/RallyClip/releases/tag/artifact-rallyclip_v0.5.0 (non-draft). git ls-files models has no *.onnx (manifests + SHA256SUMS only). PYTHONPATH=src:tests pytest -m 'not slow and not e2e': 298 passed, 6 skipped. Fetch unpacks to a temp dir and installs only after SHA-256 verify so a rejected zip cannot overwrite SHA256SUMS. Hash mismatch raises ArtifactError. ci.yml fetch x2; release.yml fetch + verify_artifact_dir. RallyClip.spec still packs DEFAULT_ARTIFACT_DIR; frozen sources do not import runtime.artifact."
+    },
+    {
+      "id": "heatmap-decode-overrides",
+      "name": "Per-run heatmap decode overrides (threshold, merge_gap_sec, smooth_sigma_frames, hybrid_min_duration_sec, end_pad_sec) via CLI/config.toml/API, end_pad_sec decode knob, GUI decode presets (jp-junior)",
+      "status": "passing",
+      "verification": "PYTHONPATH=src:tests $PY -m pytest -q -p no:cacheprovider tests/test_heatmap_decode.py tests/test_heatmap_runtime.py tests/test_cli_config_contract.py tests/test_gui_smoke.py tests/test_cli_golden_parity.py",
+      "evidence": "2026-10-11 (uv .venv py3.12.7 (--extra cpu --extra dev --extra train), shota Mac M3): decode/runtime/cli-contract/gui-smoke 119 passed + the wall-clock preview benchmark failure under load (passes in the idle full gate); golden parity 1 passed. Overrides layer over the v0.6.0 manifest (smooth 1.5 / merge 0.0 / floor 4.0); none set = byte-identical CSV. jp-junior = threshold 0.5 / smooth_sigma_frames 1.5 / merge_gap_sec 0.0 / hybrid_min_duration_sec 1.0 / end_pad_sec 1.6 (v0.6.0 2R point F1 0.83 -> 0.925, measured in the v0.5.0 snapshot session)."
+    },
+    {
+      "id": "upload-cap-32gb",
+      "name": "GUI upload cap raised from 2 GB to 32 GB (env RALLYCLIP_MAX_UPLOAD_GB), cap served via /api/config/defaults, JSON 413",
+      "status": "passing",
+      "verification": "PYTHONPATH=src:tests $PY -m pytest -q -p no:cacheprovider tests/test_api_route_contracts.py tests/test_gui_startup_imports.py",
+      "evidence": "2026-10-11 (uv .venv py3.12.7 (--extra cpu --extra dev --extra train), shota Mac M3): 12 passed. feat/runtime-v060 still had the 2 GB cap; upstream PR #60 (open, against main) removes the cap instead, reconcile when either lands. Large-upload manual check was done on v0.5.0 (2026-10-07), not repeated on this branch."
+    },
+    {
+      "id": "phase1-player-identity",
+      "name": "Phase 1: per-point server detection + A/B identity; opt-in player-track sidecar (CLI --players, GUI always on, /api/library/<id>/points); v2 slot-player tee",
+      "status": "passing",
+      "verification": "PYTHONPATH=src:tests $PY -m pytest -q -p no:cacheprovider tests/test_players.py tests/test_runtime_v2_path.py tests/test_runtime_api_engine.py tests/test_gui_startup_imports.py tests/test_cli_golden_parity.py; PYTHONPATH=src $PY -m cli.main --video tests/fixtures/golden_cli/clip.mp4 --output-dir X --csv-output-dir X --output-name golden --write-csv --no-segment-video --yolo-device cpu --players",
+      "evidence": "2026-10-11 (uv .venv py3.12.7 (--extra cpu --extra dev --extra train), shota Mac M3): 49 passed + golden parity 1 passed. --players on the golden clip (v0.6.0 v2 path): segments CSV equal to the run without --players; golden_players.npz equal to scripts/eval/dump_heatmap_tracks.py output on all 21 shared keys (near 95/120, far 36/120 frames, ref 1920x1080); points.json written. Real-match accuracy (server 0.97-1.0, identity 0.97-1.0 on 5 matches) is from the v0.5.0 snapshot; not yet re-run on v0.6.0 dumps."
+    },
+    {
+      "id": "phase2-shot-events",
+      "name": "Phase 2 first cut: swing detection from 5 fps pose + rule-based stroke type; alternation prior; labelling clip exporter",
+      "status": "passing",
+      "verification": "PYTHONPATH=src:tests $PY -m pytest -q -p no:cacheprovider tests/test_shots.py; PYTHONPATH=src $PY scripts/eval/score_shots.py --tracks tests/fixtures/golden_cli/clip.tracks.npz",
+      "evidence": "2026-10-11 (uv .venv py3.12.7 (--extra cpu --extra dev --extra train), shota Mac M3): 24 passed with the fixture regenerated from this branch. Golden clip: 1 point, far assigned present 0.30 (v0.5.0: 0.0), motion shots near 2 / far 2, 2 prior-filled; export_shot_clips wrote 4 clips + labels_template.csv. No stroke labels yet."
+    },
+    {
+      "id": "phase4-score-reconstruction",
+      "name": "Phase 4 (label-free part): tennis score state machine, reconstruction from winners, server-sequence consistency check, winner-CSV reader",
+      "status": "passing",
+      "verification": "PYTHONPATH=src:tests $PY -m pytest -q -p no:cacheprovider tests/test_score.py; PYTHONPATH=src $PY scripts/eval/reconstruct_score.py --servers-json <name>_points.json",
+      "evidence": "2026-10-11 (uv .venv py3.12.7 (--extra cpu --extra dev --extra train), shota Mac M3): 32 passed. reconstruct_score.py --servers-json on the golden clip's points.json runs (1 point, server unknown); on a synthetic 12-point A/B/A list: agreement 1.000, 3 games."
     }
   ],
-  "active": "artifact-registry"
+  "active": "phase1-player-identity"
 }
