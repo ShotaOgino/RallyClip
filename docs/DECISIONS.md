@@ -844,3 +844,61 @@ crop. On footage like 2R the far slot goes from ~absent to ~always present, i.e.
 to what training videos with a visible far player looked like, but keypoints now come
 from an upscaled crop. Retrain with the adaptive crop in `scripts/extract_crop_poses.py`
 before trusting accuracy deltas; the 10-min segment count is unchanged so far.
+
+## 2026-10-12 — Merge `feat/far-crop-upscale` into `feat/port-v050-analysis`
+
+- **What:** merged be1627d (geometry-driven, upscaled far-court crop; far-slot guards) into
+  the port branch (merge commit 9a964ce). `build_feature_stream` keeps both sides: crop
+  kwargs from `_far_crop_kwargs(geometry, ...)` and the player-sink tee (raw detections,
+  `raw_scale`, `sink.geometry`). features.json keeps every entry of both branches; the
+  `tests/test_players.py` net-line sink stub became a geometry without far corners
+  (`_far_crop_kwargs` reads them; the stub exercises the fixed-window fallback).
+- **Why:** the far player is the missing input of Phase 1/2 on beta-tennis; with the
+  upscaled crop it is present in 92-99 % of in-point frames on all five matches (was ~2 %).
+- **Caveat (unchanged from the far-crop entry):** the v0.6.0 model was trained on
+  native-scale crop features, so serving now differs from training; decode params below
+  are tuned to this mismatch and need re-tuning after a retrain with the adaptive crop.
+  Golden parity still passes without regeneration.
+
+## 2026-10-12 — Far serves by direct observation (`detect_server` "far_reach")
+
+- **Problem:** with the far player observed, `detect_server`'s elimination fallback (far
+  serves when the near player never raises AND the far player is unseen) switched itself
+  off, and the strict raise test (wrist above the head AND arm extended >= 0.7 torso) fires
+  on the 40-55 px far player in only 10-60 % of far serves at 5 fps. Server coverage fell to
+  0.61-0.80 and, on 2R/P1R, identity to 0.53/0.45.
+- **What:** `wrist_reach` (higher wrist above the head in torso lengths, no extension test);
+  "far_reach": near never raises, far present >= 30 % of the serve window and its peak
+  reach >= -0.4 -> far serves, confidence 0.3 at the threshold to 0.9 half a torso above,
+  the peak time stands in for the first raise (serve side reads the far server's own feet).
+  Raise still wins; elimination stays for footage where the far player is not seen. Rows
+  gain `server_method`.
+- **Threshold:** on 2R the far player's peak reach in the serve window separates cleanly:
+  far-serve points 10th percentile -0.14 (min -0.63), near-serve points max -0.53; -0.4 sits
+  in the gap and was not re-tuned on the other four matches.
+- **Numbers (tdproj points, scoreboard reference, five matches):** far_reach: server accuracy
+  1.0/1.0/1.0/1.0/0.978 (1R/2R/3R/SF/P1R) at coverage 0.986/0.964/0.974/1.0/0.979; never wrong
+  on 1R-SF. Near-only + elimination (far track hidden): 1.0/0.982/0.987/1.0/0.968 at coverage
+  1.0 (the elimination guesses the trailing duplicate clip). Raise only: coverage 0.61-0.80.
+  Identity 1.0 on 1R-SF, 0.968 on P1R (the known tiebreak change). Far-served points: the
+  visual serve side from the far server's own feet equals the one from the near receiver's
+  feet on 164/164 points, so the low visual-vs-scoreboard-parity agreement on 1R (0.55),
+  3R (0.65) and P1R (0.70) is the parity reference, not the position: e.g. 1R game 1 has
+  first-serve faults clipped separately with a 10.7 s gap (> `same_point_gap_s` 5 s), which
+  shifts the parity for the rest of the game.
+- **Rejected:** relaxing `arm_raised` for both sides (the near raise is precise, 1.0, and
+  would gain receiver false positives); keeping elimination when the far player is visible
+  but not reaching (would assign the trailing duplicate clips).
+- `score_shots.py --server phase1` passes the Phase 1 server to the shot pass: once far
+  swings exist the shot pass's own serve inference picks the near side on many far-serve
+  points (serve side per game 0.75-0.91 -> 0.93-1.0).
+
+## 2026-10-12 — jp-junior re-tuned on five matches: threshold 0.7 / floor 2.0 s
+
+- **What:** `configs/decode/jp-junior.toml` + the GUI preset: threshold 0.5 -> 0.7,
+  hybrid_min_duration_sec 1.0 -> 2.0 (smooth 1.5, merge 0.0, end pad 1.6 kept).
+- **Why:** with the upscaled far crop the old profile merges neighbouring points (mean point
+  F1 0.827 < manifest defaults 0.830; merged 38). Grid threshold 0.4-0.7 x floor {0,1,2} s:
+  best 0.7 / 2.0 = mean F1 0.903 (+0.076 over the old profile), merged 11, time-F1 0.908.
+  0.75 / 0.8 (checked outside the grid) are lower (0.895 / 0.879). Floor 2.0 vs 1.0 at 0.7:
+  +0.006. Same player / venue / day for all five matches; re-tune after a retrain.

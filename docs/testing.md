@@ -16,7 +16,13 @@ equivalent alternative; `.venv-train` is what was verified 2026-07-03.)
 PYTHONPATH=src:tests $PY -m pytest -q -m "not slow and not e2e" -p no:cacheprovider
 ```
 
-Last known (2026-10-11, `feat/port-v050-analysis` + serve side (`tests/test_serve_side.py` 22 + 2 in
+Last known (2026-10-12, `feat/port-v050-analysis` + merged `feat/far-crop-upscale` (+25
+`tests/test_crop_pass.py`) + far_reach server detection (+3 in `tests/test_players.py`), idle
+machine): **610 passed, 9 skipped, 38 deselected, ~46s**; compileall 0; golden parity 1 passed
+(no regeneration). Under load avg ~80-97 the two GUI preview latency benchmarks fail; re-run
+alone / idle they pass.
+
+Previous (2026-10-11, `feat/port-v050-analysis` + serve side (`tests/test_serve_side.py` 22 + 2 in
 `tests/test_players.py`)): **580 passed, 9 skipped, 38 deselected** + 2 wall-clock failures
 (`test_gui_smoke.py::test_web_preview_generation_latency_benchmark` and
 `::test_preview_window_generation_latency_benchmark`, load average ~80 from other jobs; re-run alone the

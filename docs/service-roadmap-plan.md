@@ -31,7 +31,8 @@ layers deliver stats customers already pay for (rally length, serve stats, strok
       Done 2026-10-11: `[run]` keys / `--threshold` `--merge-gap-sec` `--smooth-sigma-frames`
       `--hybrid-min-duration-sec` `--end-pad-sec` / `/api/upload-and-start` config -> `RunRequest.decode_params`.
 - [ ] Dump tracks for every match that has both video and tdproj (`scripts/eval/`),
-      grid over threshold 0.5-0.8, pick a `jp-junior` profile. Target: point F1 >= 0.85,
+      grid over threshold 0.5-0.8, pick a `jp-junior` profile. 2026-10-12: five JJTT
+      matches dumped with the far crop; jp-junior = 0.7 / floor 2.0, mean point F1 0.903. Target: point F1 >= 0.85,
       merged <= 5 %, missed <= 2 % on held-out matches.
 - [x] Git home: fork `iroblesrazzaq/RallyClip` (user decision) so work is reviewable.
       Done 2026-10-11: `ShotaOgino/RallyClip`, branch `feat/port-v050-analysis`.
@@ -69,10 +70,9 @@ Status (2026-10-11, first cut, near-player-first; see docs/PROGRESS.md "Phase 1"
       errors (repeated / missing clips) or the trailing duplicate clip, not position errors.
 - [ ] Court homography for the other Phase 1 outputs (positions are still reference pixels; the serve side
       is the first user of court metres).
-- [ ] Far player: not detected by the shipped pose pass (far present < 0.2 % of frames,
-      raw detections included), so far-side evidence and far court positions do not
-      exist yet; `pick_far_player` is a best-effort helper for when a far-court crop /
-      higher-res pass lands (v0.6.0 question).
+- [x] Far player (2026-10-12): the merged upscaled far crop puts the far player in 92-99 % of
+      in-point frames on all five matches; `detect_server` observes far serves directly
+      ("far_reach"): server 0.978-1.0 at coverage 0.96-1.0, identity 1.0 (P1R 0.968).
 - [ ] Tiebreak side changes (every 6 points, no break) are invisible to the gap cue.
 - [ ] Only one player / venue / day (Tsukamoto, 2026-08-24); other venues untested.
 
@@ -100,10 +100,8 @@ Status (2026-10-11, first cut, label-free):
       change-of-ends rule).
 - [x] Labelling helper `scripts/eval/export_shot_clips.py` (1.2 s clips +
       `labels_template.csv` with predictions pre-filled).
-- [ ] Far player: not detected by the shipped pose pass at all on beta-tennis (raw
-      pre-filter detections hold no far-court person on SF), so every far shot is a
-      prior (40-47 % of shots). Needs a far-court crop / higher-res second pose pass
-      (v0.6.0 runtime question in Phase 0) before far stroke types exist.
+- [x] Far player (2026-10-12): far swings observed (109-211 motion far shots per match);
+      prior-filled shots 0.40-0.47 -> 0.06-0.10 with `score_shots.py --server phase1`.
 - [ ] Label ~2k swings with the helper; measure event F1 / stroke accuracy; then the
       learned classifier (TCN on normalised keypoints) replaces `classify_stroke`.
 - [ ] Per-player handedness from Phase 1 identity (a camera side mixes two players;

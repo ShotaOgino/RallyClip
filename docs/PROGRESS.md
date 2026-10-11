@@ -1,117 +1,109 @@
 # PROGRESS — overwrite me at every session end
 
-_Last updated: 2026-10-11 (session: port of the v0.5.0 snapshot work onto the v0.6.0
-runtime branch)._
-
-## Merged from feat/far-crop-upscale (2026-10-12) — far-court crop pass
-
-- `extraction.crop_pass.adaptive_crop`: far-court window from the court geometry's far-baseline
-  corners + net line, upscaled so the far player is ~110 px; fixed window stays the fallback
-  (no far corners / manifest `far_crop.mode: fixed`). Threaded through
-  `rallyclip_engine.models._far_crop_kwargs` -> `PoseExtractor.iter_pose_frames(crop_out_size, crop_imgsz)`;
-  static CoreML canvas fit in the extractor.
-- `netline_slots.pick_far`: in-far-court > static-in-court > off-court tiers; static off-court
-  candidates never picked (`StaticDetections`); counters on `DataPreprocessor.far_pick_stats`.
-- 2R first 10 min: far present inside true points 0.8% -> 97.8% (CoreML) / 99.9% (CPU) at
-  ~1.0x (CoreML) / ~1.02-1.06x (CPU) pose cost. Details: docs/DECISIONS.md 2026-10-11.
-- Gate: 407 passed, 12 skipped, 27 deselected (torch-only modules ignored, see testing.md);
-  golden parity passes without regeneration.
-
-### Far-crop next steps
-
-1. Re-extract training crop poses with the adaptive window (`scripts/extract_crop_poses.py` still
-   uses the fixed window) and retrain, so train/serve far features match.
-2. Evaluate segment accuracy on all labeled beta-tennis matches with the new crop (only a
-   10-min segment sanity check so far: unchanged 12/17 matches).
-
+_Last updated: 2026-10-12 (session: merge the upscaled far crop into the port; re-dump and
+re-evaluate all five beta-tennis matches)._
 
 ## Repo state
 
 - Fork `ShotaOgino/RallyClip` (`origin`; `upstream` = `iroblesrazzaq/RallyClip`, read-only).
-  Branch **`feat/port-v050-analysis`**, branched from `origin/feat/runtime-v060` (9dd5ad1,
-  same as upstream). Worktree `~/Documents/RallyClip-v060-port`; the clone
-  `~/Documents/RallyClip-v060` holds a separate local branch `feat/far-crop-upscale`
-  (geometry-driven upscaled far crop, another agent, not pushed).
-- Commits on this branch:
-  - `08f2fe8` decode overrides + `end_pad_sec` + GUI decode presets (jp-junior) + 32 GB upload cap
-  - `7dc3723` `scripts/eval/` decode tooling (`dump_heatmap_tracks.py`, `score_heatmap_decode.py`)
-  - `fbee612` `src/analysis/` (players / shots / score) + opt-in player outputs (engine, CLI
-    `--players`, GUI always on, `/api/library/<id>/points`) + Phase 1/2/4 eval scripts + tests
-  - docs/features commit (this file, DECISIONS, REPO_MAP, testing, features.json, roadmap)
-- No PR opened (user decides). PR review would be Greptile only.
-- Env: worktree uv `.venv` (py3.12.7) from `uv sync --extra cpu --extra dev --extra train`
-  (the `[train]` extra is needed for the training test modules); `PY=.venv/bin/python`
-  (`uv run` rewrites `uv.lock`'s version line, don't commit that). Artifact
-  `models/rallyclip_v0.6.0/` copied from the clone (gitignored).
-- Default gate: **558 passed, 9 skipped, 38 deselected** (baseline before the port: 440
-  passed + 1 wall-clock preview-benchmark failure that only appears under machine load).
-  Compile gate exit 0. Golden parity 1 passed; golden clip CSV byte-identical to unmodified
-  `feat/runtime-v060` on this machine.
+  Branch **`feat/port-v050-analysis`** (worktree `~/Documents/RallyClip-v060-port`), based on
+  `feat/runtime-v060` (9dd5ad1) + `origin/feat/far-crop-upscale` (be1627d, merged 9a964ce).
+  No PR opened (user decides). Another agent works on `feat/stroke-fixes`
+  (`~/Documents/RallyClip-v060-strokefix`: `src/analysis/shots.py`, stroke-label scripts).
+- Commits this session: `9a964ce` merge far crop; `0bc2ca5` far_reach server detection +
+  `server_method` + `score_shots.py --server phase1`; `5607c17` jp-junior 0.7 / 2.0;
+  docs commit (this file, DECISIONS, testing, features, roadmap).
+- Env: worktree uv `.venv` (py3.12.7, `--extra cpu --extra dev --extra train`),
+  `PY=.venv/bin/python`. Artifact `models/rallyclip_v0.6.0/` (gitignored).
+- Gate (idle machine): **610 passed, 9 skipped, 38 deselected**; compileall 0; golden parity
+  1 passed (no regeneration). Under load (avg ~80-97, dumps + other jobs) the two GUI preview
+  latency benchmarks fail; they pass alone / idle.
 
-## What was ported (see DECISIONS 2026-10-11 "Port the v0.5.0 snapshot work")
+## Dumps (merged code, default device)
 
-1. **Decode overrides**: CLI `--threshold --merge-gap-sec --smooth-sigma-frames
-   --hybrid-min-duration-sec --end-pad-sec`, config.toml `[run]`, `/api/upload-and-start`;
-   `RunRequest.decode_params` merged over the manifest in `HeatmapHybridModel._decode_config`.
-   `end_pad_sec` pads after merge + floor, re-merges touch/overlap, clamps.
-2. **Decode presets**: `DECODE_PRESETS` (default, jp-junior), `/api/config/defaults
-   .decode_presets`, `decode_preset` in upload config, frontend select (hidden if absent),
-   `configs/decode/jp-junior.toml`. **jp-junior on v0.6.0 = threshold 0.5,
-   smooth_sigma_frames 1.5, merge_gap_sec 0.0, hybrid_min_duration_sec 1.0, end_pad_sec 1.6.**
-3. **Upload cap 32 GB** (`MAX_UPLOAD_BYTES`, `RALLYCLIP_MAX_UPLOAD_GB`, JSON 413,
-   `max_upload_bytes`). `feat/runtime-v060` still had 2 GB; upstream PR #60 (open, vs
-   `main`) removes the cap entirely, so expect a conflict there.
-4. **`scripts/eval/`**: dump (v2: tees `iter_slot_players`; v1: `iter_build_features`; raw
-   pre-filter detections kept), decode scorer (base = dump's manifest params),
-   `analyze_players.py`, `score_shots.py`, `export_shot_clips.py`, `reconstruct_score.py`.
-   All run on the golden clip on this branch.
-5. **`src/analysis/`** + engine/CLI/GUI wiring. The player sink tees the v2 slot stream (near
-   from below the net, far from the crop pass, 1920x1080 reference). `PlayerTracks` keeps
-   the shipped far record per frame and fills gaps from the raw pick. Fixture
-   `tests/fixtures/golden_cli/clip.tracks.npz` regenerated on this branch.
-6. Docs: DECISIONS (snapshot entries carried over + port entry), REPO_MAP routes,
-   testing counts, features.json (`heatmap-decode-overrides`, `upload-cap-32gb`,
-   `phase1-player-identity`, `phase2-shot-events`, `phase4-score-reconstruction`),
-   `docs/service-roadmap-plan.md`.
+`~/Documents/RallyClip-0.5.0/logs/eval/beta-tennis-v060/<match>.farcrop.tracks.npz` for
+1R / 2R / 3R / SF / P1R (all with `geometry_json`; the 2R one is the far-crop branch's dump
+with geometry added from `compute_court_geometry`, it has no `raw_*` keys). Logs next to them
+(`<match>.farcrop.log`). 6-65 min per match depending on machine load.
 
-Not ported: the snapshot's `logs/eval/` outputs (gitignored), its `.gstack/` ignore line,
-and its README / pyproject edits (none were part of the work).
+## Five-match tables (tdproj GT; P1R's tdproj is the `AB選` file in the SF folder)
 
-## v0.6.0 numbers so far
+(a) Point detection (IoU >= 0.5; FP = predictions overlapping no GT point; time-F1 =
+beta-tennis protocol):
 
-- Golden clip (this branch): far player present in 36/120 kept frames (v0.5.0: 0); shots
-  report 2 near + 2 far motion swings in the one point.
-- beta-tennis 2R (measured in the v0.5.0 snapshot session with the v0.6.0 clone + a scratch
-  dump): court geometry OK (far baseline ~y400, net ~y465 in 1080p); point F1 (IoU>=0.5)
-  default 0.83 (v0.5.0 default 0.79); with threshold 0.5 / hybrid_min_duration_sec 1.0 /
-  smooth 1.5 / end pad 1.6: **0.925** (v0.5.0 jp-junior profile: 0.933). Far slot present in
-  664/10300 frames but only ~2% inside points; frame test: native-scale crop finds the far
-  player 1/6, 2x upscaled crop 4/6.
-- Phase 1/2/4 real-match numbers (server 0.97-1.0, identity 0.97-1.0 on 1R/2R/3R/SF/P1R) are
-  from v0.5.0 dumps; not re-run on v0.6.0 dumps yet.
+| match | decode | GT | pred | F1 | merged | FP | missed | time-F1 |
+|---|---|---|---|---|---|---|---|---|
+| 1R | manifest default | 71 | 56 | 0.740 | 15 | 2 | 2 | 0.875 |
+| 2R | manifest default | 55 | 49 | 0.827 | 7 | 2 | 1 | 0.872 |
+| 3R | manifest default | 76 | 66 | 0.831 | 8 | 1 | 3 | 0.862 |
+| SF | manifest default | 59 | 64 | 0.878 | 0 | 5 | 2 | 0.842 |
+| P1R | manifest default | 95 | 90 | 0.876 | 6 | 1 | 2 | 0.876 |
+| 1R | jp-junior old 0.5/1.0 | 71 | 58 | 0.760 | 16 | 4 | 1 | 0.895 |
+| 2R | jp-junior old 0.5/1.0 | 55 | 50 | 0.819 | 8 | 4 | 1 | 0.911 |
+| 3R | jp-junior old 0.5/1.0 | 76 | 69 | 0.869 | 8 | 2 | 1 | 0.900 |
+| SF | jp-junior old 0.5/1.0 | 59 | 63 | 0.869 | 0 | 5 | 1 | 0.869 |
+| P1R | jp-junior old 0.5/1.0 | 95 | 98 | 0.819 | 6 | 8 | 2 | 0.905 |
+| 1R | **jp-junior new 0.7/2.0** | 71 | 67 | 0.913 | 5 | 2 | 1 | 0.917 |
+| 2R | **jp-junior new 0.7/2.0** | 55 | 57 | 0.946 | 1 | 2 | 1 | 0.919 |
+| 3R | **jp-junior new 0.7/2.0** | 76 | 76 | 0.947 | 1 | 0 | 3 | 0.912 |
+| SF | **jp-junior new 0.7/2.0** | 59 | 74 | 0.827 | 0 | 14 | 3 | 0.878 |
+| P1R | **jp-junior new 0.7/2.0** | 95 | 98 | 0.881 | 4 | 2 | 2 | 0.912 |
 
-## Serve side (2026-10-11, added after the port)
+Means: default 0.830, old jp-junior 0.827, new jp-junior **0.903** (grid threshold 0.4-0.7 x
+floor {0,1,2}, smooth 1.5, end pad 1.6; 0.75 / 0.8 checked: 0.895 / 0.879). Profile updated
+(DECISIONS 2026-10-12). SF's 14 FPs at 0.7 are the open item.
 
-`src/analysis/serve_side.py` + rows `serve_side*` in `analyze_points` / `_points.json`
-(`serve_side_check`), geometry via `PlayerRecordSink.geometry` and npz `geometry_json`
-(engine sidecar + `dump_heatmap_tracks.py`), eval table in `analyze_players.py --geometry`.
-2R (v0.6.0 dump, geometry recomputed from the video): visual vs scoreboard parity 50/55 =
-0.909 (near serves 28/32, far serves via the near receiver 22/23); confidence median 0.975.
-See DECISIONS 2026-10-11 "Serve side". Gate 580 passed + 2 wall-clock benchmark failures
-under load avg ~80; golden parity 1 passed. The existing 2R dump has no `geometry_json`
-(it predates the key): pass `--geometry` or re-dump.
+(b) Phase 1 (scoreboard-derived reference; acc over detected / coverage):
+
+| match | server far_reach (new) | near + elimination (far hidden) | raise only | identity | side changes P/R |
+|---|---|---|---|---|---|
+| 1R | 1.0 / 0.986 | 1.0 / 0.986 | 1.0 / 0.704 | 1.0 | 1.0/1.0 (5) |
+| 2R | 1.0 / 0.964 | 0.982 / 1.0 | 1.0 / 0.636 | 1.0 | 1.0/1.0 (4) |
+| 3R | 1.0 / 0.974 | 0.987 / 1.0 | 1.0 / 0.658 | 1.0 | 1.0/1.0 (6) |
+| SF | 1.0 / 1.0 | 1.0 / 1.0 | 1.0 / 0.61 | 1.0 | 1.0/1.0 (4) |
+| P1R | 0.978 / 0.979 | 0.968 / 1.0 | 0.987 / 0.80 | 0.968 | 1.0/0.875 (8; tiebreak) |
+
+Identity / side changes are for far_reach (raise only: identity 0.527 on 2R, 0.453 on P1R).
+`detect_server` already scored far raises symmetrically, but the strict raise test catches
+only 10-60 % of far serves, and elimination switches off when the far player is visible;
+hence the new `far_reach` method.
+
+Serve side, visual vs scoreboard parity (far_reach run): 1R 39/71 = 0.55, 2R 51/55 = 0.93
+(far serves 21/21, previously 22/23 via the receiver), 3R 49/76 = 0.65, SF 57/59 = 0.97
+(far 28/30), P1R 66/95 = 0.69. Far serves: server-feet visual == receiver-feet visual on
+164/164 points (two independent observations), so the 1R/3R/P1R disagreements are the parity
+reference (separately clipped first-serve faults with gaps > 5 s, repeated clips), not the
+positions.
+
+(c) Phase 2 (`score_shots.py --server phase1`; in brackets: far track hidden, v0.5.0-like):
+
+| match | shots/point mean (median) | motion near/far | prior-filled | inter-shot median s (p10-p90) | serve side per game |
+|---|---|---|---|---|---|
+| 1R | 4.21 (4) [3.42] | 135/146 [136/0] | 0.060 [0.44] | 1.60 (0.90-2.56) | 1.0 |
+| 2R | 4.46 (4) [3.75] | 117/109 [118/0] | 0.078 [0.43] | 1.61 (0.91-2.60) | 0.981 |
+| 3R | 3.61 (3) [2.91] | 130/123 [132/0] | 0.077 [0.40] | 1.50 (0.80-2.78) | 0.987 |
+| SF | 7.09 (6) [6.05] | 188/196 [191/0] | 0.081 [0.47] | 1.61 (0.92-2.48) | 1.0 |
+| P1R | 4.70 (4) [3.58] | 189/211 [191/0] | 0.103 [0.44] | 1.59 (0.95-2.71) | 0.926 |
+
+Without `--server phase1` the shot pass's own serve inference drops serve-side-per-game to
+0.75-0.91 now that far swings exist. Inter-shot p10 fell from 1.2 s to ~0.9 s (a far swing
+and the next near swing can now both be motion events); no shot labels yet.
+
+(d) Far presence (assigned far slot): all frames / inside tdproj points / points with far >= 50 %:
+1R 0.765 / 0.985 / 71/71; 2R 0.798 / 0.972 / 55/55; 3R 0.743 / 0.916 / 75/76;
+SF 0.862 / 0.989 / 59/59; P1R 0.816 / 0.967 / 95/95 (v0.6.0 native crop on 2R: 0.064 / 0.02).
 
 ## Next steps
 
-1. User: review the branch / decide on a PR to upstream (`feat/runtime-v060` or `main`).
-2. Re-dump the five beta-tennis matches with `scripts/eval/dump_heatmap_tracks.py` on this
-   branch (logs/eval/beta-tennis/v060/), confirm jp-junior on 1R/3R/SF/P1R (only 2R was
-   measured), and re-run `analyze_players.py` / `score_shots.py`.
-3. Far player: take the `feat/far-crop-upscale` result (upscaled, geometry-driven crop);
-   if far presence inside points >= 70%, re-run Phase 1/2 with far evidence (server by
-   observation, far strokes) and retire `score_shots.py::_far_from_raw`.
-4. Phase 2 labels: `export_shot_clips.py` on one match, label ~300 swings.
-5. Phase 1: tiebreak side changes (every 6 points, no gap).
-5b. Serve side on the other four matches (re-dump with `geometry_json`); use it to
-    flag tdproj clip-parity errors and as a serve-side input to identity / side changes.
-6. Widen the eval set beyond one player / venue.
+1. Retrain with the adaptive crop in `scripts/extract_crop_poses.py` so train and serve far
+   features match; then re-tune jp-junior (today's 0.7 / 2.0 compensates for the mismatch).
+2. SF at 0.7: 14 pure FPs (74 predictions vs 59 points) — inspect them (warm-up / breaks?).
+3. Serve-side parity reference: second-serve merge by gap alone fails on 1R/3R/P1R; use the
+   visual side (now two independent observations) to flag fault clips, or label a few games.
+4. Phase 2: far strokes now observed — label ~300 swings (`export_shot_clips.py`), measure
+   event F1 / stroke accuracy; retire `score_shots.py::_far_from_raw` once no dump needs it.
+   Coordinate with `feat/stroke-fixes` (shots.py lives there).
+5. Phase 1: tiebreak side changes (P1R's missed change); identity confidence still relies on
+   the gap cue.
+6. Wire `--server phase1` style joining into the engine outputs (shots are not in the runtime yet).
+7. Widen the eval set beyond one player / venue / day.
