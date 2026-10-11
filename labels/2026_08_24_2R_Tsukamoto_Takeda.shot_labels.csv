@@ -1,0 +1,187 @@
+event_id,t,point_index,label,handedness,label_confidence,labeller,dup_of,notes
+ev0001,16.534,-1,no_swing,,high,claude-opus-pseudo,,"between points; overhead racket stretch, both hands"
+ev0002,18.292,-1,no_swing,,high,claude-opus-pseudo,,between points; racket-behind-head stretch
+ev0003,22.937,-1,unknown,,low,claude-opus-pseudo,,"between points; racket in left hand, right arm extended open; lefty FH prep or righty throwing a ball"
+ev0004,27.309,-1,unknown,,low,claude-opus-pseudo,,"between points; two-handed racket move on player's left side, no clear stroke"
+ev0005,28.375,-1,no_swing,,medium,claude-opus-pseudo,,"between points; racket handling, no stroke"
+ev0006,35.898,-1,no_swing,,high,claude-opus-pseudo,,"between points; jogging, racket swings with gait"
+ev0007,48.7,-1,no_swing,,high,claude-opus-pseudo,,between points; walking
+ev0008,56.881,-1,backhand,right,medium,claude-opus-pseudo,,between points; wristband arm swings from left hip to high right finish (one-handed BH)
+ev0009,66.01,-1,unknown,,low,claude-opus-pseudo,,"between points; gentle ball feed, side-on"
+ev0010,70.053,-1,backhand,right,low,claude-opus-pseudo,,between points; casual one-handed flick low-left to high-right
+ev0011,80.908,-1,serve,right,high,claude-opus-pseudo,,"between points (warm-up serve); toss arm up, racket behind on left"
+ev0012,88.453,-1,serve,right,high,claude-opus-pseudo,,between points (warm-up serve); racket drop then cross-body finish
+ev0013,93.639,-1,no_swing,,high,claude-opus-pseudo,,between points; scooping up a ball with the racket
+ev0014,111.131,-1,serve,right,high,claude-opus-pseudo,,between points (warm-up serve)
+ev0015,119.235,-1,serve,right,high,claude-opus-pseudo,,between points (warm-up serve); contact above right shoulder
+ev0016,153.894,-1,no_swing,,high,claude-opus-pseudo,,between points; walking
+ev0017,163.318,0,forehand,right,high,claude-opus-pseudo,,"racket prepared on right, contact out right, high finish; red-waistband player"
+ev0018,166.124,0,backhand,right,high,claude-opus-pseudo,,"two-handed: prep on left hip, finish over right shoulder"
+ev0019,169.021,0,forehand,right,high,claude-opus-pseudo,,"prep right, arms spread at contact, racket finishes over right shoulder pointing left"
+ev0020,172.5,0,no_swing,,medium,claude-opus-pseudo,,end of point; holding racket in both hands while walking
+ev0021,192.923,1,forehand,right,high,claude-opus-pseudo,,"high ball taken on the right, racket crosses over the head to the left"
+ev0022,196.255,1,forehand,right,high,claude-opus-pseudo,,"unit turn, contact on right, racket crosses to left shoulder"
+ev0023,199.435,1,forehand,right,high,claude-opus-pseudo,,"contact on right with ball visible, high finish"
+ev0024,203.509,1,forehand,right,medium,claude-opus-pseudo,,"running forehand on the right, short/defensive swing"
+ev0025,216.662,2,forehand,right,high,claude-opus-pseudo,,contact on right with ball visible
+ev0026,220.3,2,no_swing,,high,claude-opus-pseudo,,end of point; walking with racket
+ev0027,222.979,-1,no_swing,,high,claude-opus-pseudo,,between points; walking
+ev0028,254.673,3,forehand,right,high,claude-opus-pseudo,,"prep right, contact low right, finish over left shoulder"
+ev0029,270.219,-1,no_swing,,high,claude-opus-pseudo,,"between points; walking, hand at face"
+ev0030,292.68,4,forehand,right,high,claude-opus-pseudo,,contact on right with ball visible
+ev0031,293.46,4,forehand,right,medium,claude-opus-pseudo,,running; only follow-through visible (racket crosses over head right to left)
+ev0032,295.754,4,forehand,right,medium,claude-opus-pseudo,,"racket drop at t, finish over left shoulder"
+ev0033,298.981,4,forehand,right,high,claude-opus-pseudo,,"racket drop, finish over left shoulder"
+ev0034,327.762,5,forehand,right,high,claude-opus-pseudo,,"running; contact low on right with ball visible, finish high"
+ev0035,335.3,-1,no_swing,,high,claude-opus-pseudo,,between points; walking (video overlay squares at bottom)
+ev0036,390.909,-1,no_swing,,high,claude-opus-pseudo,,between points; grey-shirt player walking with towel
+ev0037,404.508,6,forehand,right,high,claude-opus-pseudo,,grey-shirt player (black wristband on left wrist); contact on right with ball at +0.25
+ev0038,405.807,6,unknown,,low,claude-opus-pseudo,,"running right, racket stays on left side; possibly backhand prep, no contact seen"
+ev0039,408.887,6,backhand,right,medium,claude-opus-pseudo,,"two hands; racket from low left to over right shoulder, high ball"
+ev0040,412.207,6,forehand,right,medium,claude-opus-pseudo,,"re-checked: ball on the right at -0.25, racket behind (image left) during the turn, contact right before t, windshield finish high right"
+ev0041,433.913,7,forehand,right,medium,claude-opus-pseudo,,"contact out front on right, free arm (wristband) left; racket ends low (slice/defensive)"
+ev0042,460.353,8,backhand,right,medium,claude-opus-pseudo,,"two hands extended on left, racket goes up over the head and finishes right"
+ev0043,463.135,8,forehand,right,medium,claude-opus-pseudo,,"wide view; lunging to the right, racket extended right near ball at +0.25"
+ev0044,465.725,8,no_swing,,high,claude-opus-pseudo,,after the point; walking head down
+ev0045,486.103,10,backhand,right,medium,claude-opus-pseudo,,"prep low left, ball by racket on left at t, hands finish by right shoulder"
+ev0046,488.507,10,unknown,,low,claude-opus-pseudo,,"re-checked: racket held up on the right with both hands; two-handed BH finish or FH unit turn, contact not visible"
+ev0047,489.847,10,forehand,right,high,claude-opus-pseudo,,"closed-stance unit turn, contact low right, finish over left shoulder"
+ev0048,526.326,11,serve,right,high,claude-opus-pseudo,ev0049,"DUP of ev0049: toss phase of the same serve (contact ~+1.0 s, checked extra frames)"
+ev0049,527.549,11,serve,right,high,claude-opus-pseudo,,"contact at -0.25, follow-through on left"
+ev0050,530.186,11,backhand,right,high,claude-opus-pseudo,,"ball on left, backswing behind (image right), contact left, two-handed finish over right shoulder"
+ev0051,550.258,12,serve,right,high,claude-opus-pseudo,ev0052,DUP of ev0052: toss phase of the same serve
+ev0052,551.12,12,serve,right,high,claude-opus-pseudo,,"contact between 0 and +0.25, jump, racket finishes left"
+ev0053,558.807,13,serve,right,high,claude-opus-pseudo,ev0054,DUP of ev0054: toss phase of the same serve
+ev0054,559.832,13,serve,right,high,claude-opus-pseudo,,"contact at t with ball on strings, follow-through left"
+ev0055,562.539,13,backhand,right,medium,claude-opus-pseudo,,"stretched two-handed backhand: contact low left, finish high right"
+ev0056,563.872,13,unknown,,low,claude-opus-pseudo,,"small low movement, racket stays low in right hand; no clear stroke"
+ev0057,566.275,13,backhand,right,medium,claude-opus-pseudo,,"two hands on racket at left at -0.25, finish high right with both hands"
+ev0058,596.718,14,serve,right,high,claude-opus-pseudo,ev0059,DUP of ev0059: toss phase of the same serve
+ev0059,597.869,14,serve,right,high,claude-opus-pseudo,,"contact just before t, landing and follow-through left"
+ev0060,601.284,14,no_swing,,high,claude-opus-pseudo,,bouncing the ball before serving
+ev0061,604.893,15,serve,right,high,claude-opus-pseudo,ev0062,DUP of ev0062: toss phase of the same serve
+ev0062,606.065,15,serve,right,high,claude-opus-pseudo,,"contact at -0.25..0, follow-through left"
+ev0063,607.71,15,backhand,right,low,claude-opus-pseudo,ev0064,"DUP of ev0064: preparation phase (racket taken back on the left, no contact in frames)"
+ev0064,608.589,15,backhand,right,medium,claude-opus-pseudo,,"contact on the left at ~t (checked extra frames), racket finishes high"
+ev0065,617.852,-1,forehand,right,medium,claude-opus-pseudo,,between points; casual swing low right to over left shoulder
+ev0066,625.384,-1,forehand,right,high,claude-opus-pseudo,,between points (rally-like hit outside GT point); contact on right with ball visible
+ev0067,638.059,16,serve,right,high,claude-opus-pseudo,,"trophy at -0.25, contact ~+0.1, follow-through left at +0.25"
+ev0068,642.552,16,serve,right,high,claude-opus-pseudo,ev0069,DUP of ev0069: toss phase of the same serve
+ev0069,643.646,16,serve,right,high,claude-opus-pseudo,,"contact at t, follow-through left"
+ev0070,646.833,16,backhand,right,medium,claude-opus-pseudo,,"contact low on the left with ball visible, finish high over right shoulder"
+ev0071,650.818,16,backhand,right,high,claude-opus-pseudo,,"contact on the left with ball at t, two-handed finish over right shoulder"
+ev0072,652.492,16,backhand,right,low,claude-opus-pseudo,,"preparation only: racket taken back on the left at +0.25, contact after the frames"
+ev0073,682.224,-1,no_swing,,high,claude-opus-pseudo,,between points; walking with a ball
+ev0074,689.537,17,serve,right,high,claude-opus-pseudo,ev0075,DUP of ev0075: toss phase of the same serve
+ev0075,690.653,17,serve,right,high,claude-opus-pseudo,,"contact at t, follow-through left"
+ev0076,693.266,17,forehand,right,high,claude-opus-pseudo,,"high ball on the strings at t on the right, finish over left shoulder"
+ev0077,696.181,17,forehand,right,high,claude-opus-pseudo,,"racket drop on right at t, finish over left shoulder at +0.25"
+ev0078,699.137,17,forehand,right,high,claude-opus-pseudo,,"contact on the right with ball at t, free (wristband) arm out left"
+ev0079,703.5,17,forehand,right,medium,claude-opus-pseudo,,"running wide right, contact low on the right at +0.25 (defensive)"
+ev0080,724.405,18,serve,right,high,claude-opus-pseudo,,"contact at t, follow-through left"
+ev0081,727.666,18,forehand,right,low,claude-opus-pseudo,,"racket high on the right at -0.25, sweeps across to the left; high ball, contact not seen clearly"
+ev0082,731.3,18,forehand,right,low,claude-opus-pseudo,,"arm extended to the right with racket low at t and +0.25, free (wristband) arm at left hip; block/slice-like, contact not seen"
+ev0083,740.756,-1,no_swing,,high,claude-opus-pseudo,,walking with a ball
+ev0084,748.306,19,serve,right,high,claude-opus-pseudo,,"contact between 0 and +0.25, follow-through left"
+ev0085,751.108,19,overhead,right,medium,claude-opus-pseudo,,"racket up behind head at -0.25, free arm pointing up at t, racket finishes low on the left at +0.25"
+ev0086,754.87,19,forehand,right,medium,claude-opus-pseudo,,"prep racket behind (image left) with free arm pointing right, ball on the right at t, windshield-wiper finish high right"
+ev0087,758.236,19,forehand,right,high,claude-opus-pseudo,,"jumping high forehand: contact high on the right with ball at t, finish right (windshield wiper)"
+ev0088,775.438,20,serve,right,high,claude-opus-pseudo,ev0089,DUP of ev0089: toss phase of the same serve
+ev0089,776.407,20,serve,right,high,claude-opus-pseudo,,contact at t (first serve; a second serve follows at ev0090/91)
+ev0090,783.374,20,serve,right,high,claude-opus-pseudo,ev0091,DUP of ev0091: toss phase of the second serve
+ev0091,784.414,20,serve,right,high,claude-opus-pseudo,,"second serve: contact at t, follow-through left"
+ev0092,787.259,20,backhand,right,medium,claude-opus-pseudo,,"ball and racket meet on the left at t, finish high over right shoulder"
+ev0093,789.648,20,backhand,right,low,claude-opus-pseudo,,"both hands on racket held on the left (BH set-up), contact not in frames"
+ev0094,903.433,-1,unknown,,low,claude-opus-pseudo,,"between points; player running sideways with racket held forward, ball near body at +0.25; stroke not identifiable"
+ev0095,913.396,21,serve,right,high,claude-opus-pseudo,,"red-waistband player; contact at t, follow-through left"
+ev0096,923.239,22,serve,right,high,claude-opus-pseudo,,"red-waistband player; racket drop at -0.25, post-contact at t, follow-through left"
+ev0097,928.9,22,unknown,,low,claude-opus-pseudo,,"different camera angle (side view, replay-like overlay); arm extended to the side with racket near the ball, FH or BH unclear"
+ev0098,952.116,23,serve,right,medium,claude-opus-pseudo,,"red-waistband player; trophy at -0.25, racket drop at t; contact after the frames"
+ev0099,960.99,24,serve,right,high,claude-opus-pseudo,,red-waistband player; contact at t
+ev0100,964.046,24,forehand,right,high,claude-opus-pseudo,,"unit turn with free arm pointing right, contact high on the right at t, finish over left shoulder"
+ev0101,976.734,-1,no_swing,,high,claude-opus-pseudo,,between points; walking
+ev0102,984.464,-1,no_swing,,high,claude-opus-pseudo,,between points; bouncing the ball on the racket
+ev0103,995.574,25,serve,right,high,claude-opus-pseudo,,"contact at -0.25, follow-through to the left"
+ev0104,996.728,25,unknown,,low,claude-opus-pseudo,,"racket held up on the left with both hands while moving; preparation only, no contact in frames"
+ev0105,997.938,25,backhand,right,medium,claude-opus-pseudo,,"contact low on the left at -0.25, released one-handed finish high on the right, free arm out left"
+ev0106,1001.519,25,forehand,right,high,claude-opus-pseudo,,"unit turn, free arm pointing right, racket drop on the right with ball at t, finish left"
+ev0107,1004.754,25,forehand,right,medium,claude-opus-pseudo,,"racket below the ball on the right at t, high finish"
+ev0108,1022.835,26,serve,right,high,claude-opus-pseudo,,"racket drop at t, contact just after"
+ev0109,1035.689,27,serve,right,high,claude-opus-pseudo,ev0110,DUP of ev0110: toss phase of the same serve
+ev0110,1036.641,27,serve,right,high,claude-opus-pseudo,,"contact just before t, follow-through left"
+ev0111,1063.776,-1,forehand,right,low,claude-opus-pseudo,,between points; soft ball feed to the opponent on the right side (not a rally shot)
+ev0112,1070.02,28,serve,right,high,claude-opus-pseudo,,"red-waistband player; contact at t, follow-through left"
+ev0113,1075.1,28,forehand,right,high,claude-opus-pseudo,,"ball on the right at -0.25/0, racket swings up, finish over left shoulder"
+ev0114,1178.618,-1,no_swing,,high,claude-opus-pseudo,,between points; walking with towel
+ev0115,1180.778,-1,no_swing,,high,claude-opus-pseudo,,between points; walking with towel
+ev0116,1211.888,-1,no_swing,,high,claude-opus-pseudo,,between points; walking
+ev0117,1234.223,29,forehand,right,medium,claude-opus-pseudo,,"high ball on the right, racket up at contact, finish above head"
+ev0118,1253.011,30,forehand,right,medium,claude-opus-pseudo,,"contact on the right at -0.25 with ball, low finish across to the left"
+ev0119,1255.886,30,forehand,right,high,claude-opus-pseudo,,"jumping forehand: racket up on the right at t, finish over left shoulder"
+ev0120,1275.909,-1,no_swing,,high,claude-opus-pseudo,,walking (end of point)
+ev0121,1289.492,31,unknown,,low,claude-opus-pseudo,,racket above the head moving to the left shoulder: finish/recovery of a stroke made before the frames
+ev0122,1316.676,32,forehand,right,low,claude-opus-pseudo,,"preparation only: unit turn with both hands to the right side at +0.25, contact after the frames"
+ev0123,1317.889,32,forehand,right,high,claude-opus-pseudo,,"contact on the right with ball at t, finish over left shoulder"
+ev0124,1320.891,32,backhand,right,high,claude-opus-pseudo,,"backswing on the left, ball on the left at t, two-handed finish over right shoulder"
+ev0125,1326.1,32,no_swing,,medium,claude-opus-pseudo,,catching the ball with the free hand (end of point)
+ev0126,1327.946,-1,forehand,right,low,claude-opus-pseudo,,between points; casual low feed hit on the right
+ev0127,1336.877,33,backhand,right,medium,claude-opus-pseudo,,racket from the left side to a two-handed finish over the right shoulder; ball not visible
+ev0128,1337.742,33,forehand,right,high,claude-opus-pseudo,,"contact on the right with ball at t, finish over the head"
+ev0129,1366.464,34,forehand,right,high,claude-opus-pseudo,,"unit turn, racket low on the right at t, high windshield finish"
+ev0130,1368.548,34,backhand,right,low,claude-opus-pseudo,,"preparation only: two-handed backswing on the left at +0.25, contact after the frames"
+ev0131,1369.867,34,backhand,right,high,claude-opus-pseudo,,"two-handed backswing on the left, contact on the left with ball at t, finish over right shoulder"
+ev0132,1373.674,34,forehand,right,high,claude-opus-pseudo,,"running forehand: racket low on the right at -0.25, swung up at t, free arm out left"
+ev0133,1465.592,-1,no_swing,,high,claude-opus-pseudo,,between points; walking
+ev0134,1489.169,35,forehand,right,high,claude-opus-pseudo,,"stretched wide forehand, contact on the right"
+ev0135,1519.581,36,backhand,right,high,claude-opus-pseudo,,"two-handed racket low on the left at t, ball at the strings on the left at +0.25"
+ev0136,1521.529,36,no_swing,,medium,claude-opus-pseudo,,patterned-shorts player running with racket at the left side; no stroke in frames
+ev0137,1526.435,36,forehand,right,high,claude-opus-pseudo,,"patterned-shorts player (black wristband on the FREE left arm); side-on prep with racket behind (image left), contact on the right with ball at t; checked dense frames"
+ev0138,1546.274,37,forehand,right,high,claude-opus-pseudo,,"patterned-shorts player; lunging wide forehand, contact on the right at -0.25"
+ev0139,1578.362,38,unknown,,low,claude-opus-pseudo,,running to the right with racket low; no contact in frames
+ev0140,1587.514,39,forehand,right,high,claude-opus-pseudo,,"patterned-shorts player; side-on prep with racket behind (image left) and free arm pointing right, contact on the right at ~+0.1 with ball (checked dense frames)"
+ev0141,1591.434,39,unknown,,low,claude-opus-pseudo,,"high ball: racket above head on the left, then at head height, then across the chest to the left; FH vs high BH unclear"
+ev0142,1609.199,-1,no_swing,,high,claude-opus-pseudo,,between points; patterned-shorts player bouncing the ball with the racket in the right hand
+ev0143,1614.089,40,serve,right,high,claude-opus-pseudo,ev0144,"DUP of ev0144: toss phase of the same serve (patterned-shorts player, racket in right hand)"
+ev0144,1615.284,40,serve,right,high,claude-opus-pseudo,,"contact at -0.25, follow-through low left"
+ev0145,1617.344,40,unknown,,low,claude-opus-pseudo,,moving left with racket held up then across to the right at chest height; no contact visible
+ev0146,1618.152,40,backhand,right,medium,claude-opus-pseudo,,"ball high on the left at -0.25, racket low left with the wristband hand on it, swings up to a high finish on the right"
+ev0147,1627.27,-1,forehand,right,low,claude-opus-pseudo,,"between points; soft feed to the opponent, racket swung low on the right"
+ev0148,1632.29,41,serve,right,high,claude-opus-pseudo,ev0149,DUP of ev0149: toss phase of the same serve
+ev0149,1633.41,41,serve,right,high,claude-opus-pseudo,,"racket drop at -0.25, post-contact at t, follow-through left"
+ev0150,1636.403,41,forehand,right,medium,claude-opus-pseudo,,"ball on the right at -0.25, racket low then high over the left shoulder at t / +0.25 (side-on forehand finish)"
+ev0151,1640.166,41,backhand,right,low,claude-opus-pseudo,,"wristband (free) hand on the racket low on the left at -0.25, racket finishes high on the right; ball not visible"
+ev0152,1647.466,-1,no_swing,,high,claude-opus-pseudo,,between points; walking
+ev0153,1667.805,42,serve,right,high,claude-opus-pseudo,,"contact at t with ball on strings, follow-through left"
+ev0154,1670.424,42,backhand,right,high,claude-opus-pseudo,,"patterned-shorts player; two-handed: ball on the left, contact on the left at t, both hands finish over right shoulder"
+ev0155,1673.521,42,forehand,right,high,claude-opus-pseudo,,"side-on prep, free (wristband) arm pointing at the ball, contact on the right, finish over left shoulder"
+ev0156,1686.473,43,serve,right,high,claude-opus-pseudo,,"trophy at -0.25, racket drop at t, contact just after"
+ev0157,1689.005,43,forehand,right,medium,claude-opus-pseudo,,"running wide right, racket reaching low on the right at t (defensive)"
+ev0158,1696.061,-1,no_swing,,high,claude-opus-pseudo,,between points; walking with a ball
+ev0159,1696.69,-1,no_swing,,high,claude-opus-pseudo,,between points; wiping face with the wristband
+ev0160,1710.904,44,serve,right,medium,claude-opus-pseudo,,toss phase of a serve; contact after the frames and no other event for this serve
+ev0161,1713.903,44,forehand,right,medium,claude-opus-pseudo,,"moving right, racket on the right side at t, low reach on the right at +0.25 (defensive forehand)"
+ev0162,1736.9,-1,no_swing,,high,claude-opus-pseudo,,"between points; wiping face, walking"
+ev0163,1740.038,-1,no_swing,,high,claude-opus-pseudo,,between points; walking
+ev0164,1744.968,45,serve,right,high,claude-opus-pseudo,,"trophy at -0.25, racket drop at t, contact/after at +0.25"
+ev0165,1748.174,45,forehand,right,medium,claude-opus-pseudo,,"ball in front-right, racket low on the right at t, extended out to the right at +0.25; free (wristband) arm left"
+ev0166,1751.5,45,unknown,,low,claude-opus-pseudo,,running right toward the net with racket up on the right; no contact in frames
+ev0167,1865.06,46,serve,right,high,claude-opus-pseudo,,"red-waistband player; contact at t with ball above, follow-through left"
+ev0168,1868.209,46,backhand,right,high,claude-opus-pseudo,,"red-waistband player; two-handed: contact on the left with ball at t, finish over right shoulder"
+ev0169,1889.91,47,serve,right,high,claude-opus-pseudo,,"red-waistband player; trophy at -0.25, racket drop at t, post-contact at +0.25"
+ev0170,1896.255,48,serve,right,high,claude-opus-pseudo,ev0171,DUP of ev0171: toss phase of the same serve
+ev0171,1897.218,48,serve,right,high,claude-opus-pseudo,,contact just before t; checked later frames: racket in the right hand (white wristband) from behind
+ev0172,1901.135,48,no_swing,,high,claude-opus-pseudo,,"end of point; pointing / gesturing, racket lowered (scoreboard overlay squares visible)"
+ev0173,1903.5,-1,no_swing,,high,claude-opus-pseudo,,walking with the racket in the right hand
+ev0174,1933.603,49,serve,right,high,claude-opus-pseudo,ev0175,DUP of ev0175: toss phase of the same serve
+ev0175,1934.522,49,serve,right,high,claude-opus-pseudo,,"contact at t, follow-through left"
+ev0176,1945.06,50,serve,right,high,claude-opus-pseudo,,"contact at t with ball above, follow-through low left"
+ev0177,1948.3,50,unknown,,low,claude-opus-pseudo,,split-step / moving with racket low on the right; no stroke in frames
+ev0178,1972.924,-1,no_swing,,high,claude-opus-pseudo,,between points; walking with the racket in the right hand
+ev0179,1977.445,51,serve,right,high,claude-opus-pseudo,,"trophy at -0.25, racket drop at t, contact at +0.25 with ball on strings"
+ev0180,1981.896,51,no_swing,,high,claude-opus-pseudo,,"walking, hand to the cap"
+ev0181,1996.125,52,serve,right,high,claude-opus-pseudo,,"contact at t, follow-through left"
+ev0182,2002.654,52,serve,right,medium,claude-opus-pseudo,,post-contact: racket over the head at -0.25 then down on the right; serve follow-through
+ev0183,2005.734,52,no_swing,,medium,claude-opus-pseudo,,"player turned toward the camera, low racket flick with the ball rising past him; ball handling, not a rally stroke"
+ev0184,2007.5,52,no_swing,,high,claude-opus-pseudo,,throwing a ball away underarm with the free hand
+ev0185,2035.348,53,serve,right,high,claude-opus-pseudo,ev0186,DUP of ev0186: toss phase of the same serve
+ev0186,2036.193,53,serve,right,high,claude-opus-pseudo,,"trophy at -0.25, racket drop at t, follow-through left at +0.25"

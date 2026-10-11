@@ -902,3 +902,44 @@ before trusting accuracy deltas; the 10-min segment count is unchanged so far.
   best 0.7 / 2.0 = mean F1 0.903 (+0.076 over the old profile), merged 11, time-F1 0.908.
   0.75 / 0.8 (checked outside the grid) are lower (0.895 / 0.879). Floor 2.0 vs 1.0 at 0.7:
   +0.006. Same player / venue / day for all five matches; re-tune after a retrain.
+## 2026-10-12 — Phase 2 stroke labels: model pseudo-labels on 2R, pending human verification
+
+- **Decision:** Build the first stroke-type labels as **model-generated pseudo-labels**
+  (`labeller = claude-opus-pseudo`) on beta-tennis 2R. Every near-player swing that
+  `analysis.shots.detect_swings` finds was labelled: 143 inside GT points before the
+  alternation merge, plus 43 between points, for 186 in total. Each event was labelled
+  from one PNG (three crops at t-0.25/t/t+0.25 s) with the prediction hidden. The labels
+  are committed as `labels/2026_08_24_2R_Tsukamoto_Takeda.shot_labels.csv`, next to the
+  prediction file (`.events.csv`), so the score reproduces without the video. The
+  vocabulary adds `no_swing` (false event) to the five strokes + `unknown`, and a `dup_of`
+  column marks a second detection of the same stroke.
+- **Population:** pre-merge swings instead of only the merged shots. 2R has 118 merged
+  near motion shots, under the 150-event floor. Pre-merge swings also measure what the
+  merge drops: 12 of the 17 missed in-point serves are toss/contact twins the merge
+  removed, and in several pairs it kept the toss (the faster motion) over the contact.
+- **Findings (pseudo-labels, single match):**
+  - In-point accuracy is 44/122 = 0.361 (0.386 excluding low-confidence labels; merged
+    shots only: 0.402). Serve precision is 1.0, recall 0.66 (merged: 0.857). The volley
+    rule predicted 23 in-point volleys and none were real (8 FH, 6 serves, 3 BH, 4
+    unknown, 2 no_swing).
+  - Handedness: both players hit right-handed in every stroke-labelled event (133/133).
+    `estimate_handedness` returned `left` for the near side. Forehand and backhand were
+    swapped in 43 of 56 FH/BH-predicted events. Forcing `right` (`export_shot_frames.py
+    --hand right`, same swing set) gives in-point 69/122 = 0.566, merged 0.637, FH/BH
+    36/52 correct.
+  - False events (`no_swing`) are 7 % in points, 65 % between points and 20 % overall.
+- **Why pseudo-labels:** no human labeller was available. A labelled set with known
+  provenance gets the eval tooling (exporter, scorer, CSV schema) built and surfaces gross
+  failures now: the handedness flip and the volley false positives do not depend on
+  fine-grained label accuracy.
+- **Limits:** one labeller from the model family under test. The 0.25 s frame spacing
+  often misses contact, so many labels come from preparation/follow-through. One match,
+  two right-handed juniors. No real volleys in the sample (one overhead), so their recall
+  is unmeasured. The accuracy numbers stay provisional until a human checks the labels
+  (README: start from low / unknown).
+- **Rejected:** labelling only the 118 merged shots (below the floor, and it hides merge
+  errors); video clips per event (`export_shot_clips.py`), because a model labeller cannot
+  watch video and 3-frame strips are cheaper to review; showing the prediction while
+  labelling (anchoring); counting a predicted `unknown` as abstention outside accuracy
+  (it is reported as coverage instead); fixing `estimate_handedness` / the volley rule in
+  this change (measurement only, see PROGRESS next steps).

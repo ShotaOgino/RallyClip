@@ -123,6 +123,13 @@
       "status": "passing",
       "verification": "PYTHONPATH=src:tests $PY -m pytest -q -p no:cacheprovider tests/test_crop_pass.py tests/test_netline_slots.py tests/test_runtime_v2_path.py tests/test_cli_golden_parity.py; eval: dump_tracks_v060.py --start-time 0 --duration 600 on 2026_08_24_2R_Tsukamoto_Takeda vs its tdproj",
       "evidence": "2026-10-11 (macOS, .venv py3.12): far present in true points 6/778 (0.8%) -> 761/778 (97.8%) CoreML default, 777/778 (99.9%) CPU on the first 10 min of 2R; pose cost per frame 1.02x CPU / 1.00x CoreML (interleaved micro-benchmark); golden parity 1 passed (no regen). See docs/DECISIONS.md 2026-10-11. 2026-10-12 merged into feat/port-v050-analysis (9a964ce); full-match dumps: far present all frames / in tdproj points 1R 0.765/0.985, 2R 0.798/0.972, 3R 0.743/0.916, SF 0.862/0.989, P1R 0.816/0.967; golden parity 1 passed after the merge."
+    },
+    {
+      "id": "phase2-stroke-labels",
+      "name": "Phase 2 stroke labels: 3-frame PNG exporter, label scorer, first (pseudo-)labels on beta-tennis 2R",
+      "status": "passing",
+      "verification": "PYTHONPATH=src:tests $PY -m pytest -q -p no:cacheprovider tests/test_stroke_labels.py; PYTHONPATH=src $PY scripts/eval/score_stroke_labels.py --labels labels/2026_08_24_2R_Tsukamoto_Takeda.shot_labels.csv --events labels/2026_08_24_2R_Tsukamoto_Takeda.events.csv",
+      "evidence": "2026-10-12 (sibling RallyClip-v060-port .venv py3.12, PYTHONPATH=src of this worktree, shota Mac M3): tests/test_stroke_labels.py + tests/test_shots.py 32 passed; compileall src tests scripts/eval exit 0; ruff 0.14.10 clean on new files. export_shot_frames.py on 2R (v0.6.0 dump, tdproj points, --include-between): 186 near swings (143 in points, 118 merged), 0 crop fallbacks, ~30 s decode, deterministic re-run. 186 events labelled by claude-opus-pseudo (MODEL PSEUDO-LABELS, human verification pending): serve 54, forehand 52, no_swing 38, backhand 26, unknown 15, overhead 1, volley 0; 16 dup_of. Rule classifier vs labels: in-point accuracy 44/122=0.361 (excl. low-conf 0.386; merged shots 41/102=0.402); serve P=1.0 R=0.66; FH/BH swapped 43/56 (detector assumed left, both players observed right-handed 133/133); volley predicted 23x in points, 0 true. --hand right counterfactual (same swings): in-point 69/122=0.566, merged 0.637, FH/BH 36/52 correct. False events (no_swing): 7% in points, 65% between points, 20% overall."
     }
   ],
   "active": "phase1-player-identity"
