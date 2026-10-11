@@ -2,11 +2,14 @@
 params can be swept offline without re-running pose extraction, plus the per-frame
 near/far player records (reference pixels = the manifest's screen size: 1280x720 for
 v1 artifacts, 1920x1080 for v0.6.0) and the raw pre-court-filter detections, so the
-Phase 1-2 analysis (src/analysis/) can run offline on the same dump.
+Phase 1-2 analysis (src/analysis/) can run offline on the same dump. v2 net-line
+artifacts also store the run's court geometry (preprocessing.court_lines dict, reference
+pixels) as the JSON string key `geometry_json` (serve side, analysis.serve_side).
 Run from repo root: PYTHONPATH=src $PY scripts/eval/dump_heatmap_tracks.py --video V --out X.npz
 """
 
 import argparse
+import json
 import time
 from pathlib import Path
 import numpy as np
@@ -121,6 +124,20 @@ def _tee_pre(self, pose_data, court_mask, src_width, src_height):
 
 
 _DP.iter_preprocess_frames = _tee_pre
+
+# Court geometry (v2 net-line slots): the engine imports compute_court_geometry at call
+# time, so wrapping the module attribute captures the full dict (points, homography).
+import preprocessing.court_lines as _court_lines  # noqa: E402
+
+_orig_geometry = _court_lines.compute_court_geometry
+
+
+def _keep_geometry(*args, **kwargs):
+    _src["geometry"] = _orig_geometry(*args, **kwargs)
+    return _src["geometry"]
+
+
+_court_lines.compute_court_geometry = _keep_geometry
 _FE = deps.FeatureEngineer
 _orig_iter = _FE.iter_build_features
 
@@ -231,6 +248,9 @@ assert len(npres) == n, f"player records {len(npres)} != track frames {n}"
 rb, rk, rkc, rbc, rcount = _pack_raw(
     _players["raw"], req.screen_width, req.screen_height
 )
+extra = {}
+if _src.get("geometry") is not None:
+    extra["geometry_json"] = json.dumps(_src["geometry"])
 np.savez(
     a.out,
     pointness=pointness,
@@ -255,8 +275,10 @@ np.savez(
     raw_box_conf=rbc,
     raw_count=rcount,
     src_size=np.array([_src["w"] or 0, _src["h"] or 0], dtype=np.int32),
+    **extra,
 )
 print(
+    f"court geometry: {'saved' if extra else 'none (v1 artifact or no court found)'}; "
     f"players: near present {int(npres.sum())}/{n}, far present {int(fpres.sum())}/{n}, raw detections/frame mean {rcount.mean():.2f}, frames with >=2 raw {(rcount >= 2).sum()}",
     flush=True,
 )

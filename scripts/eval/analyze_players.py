@@ -2,7 +2,15 @@
 Run from repo root:
   PYTHONPATH=src $PY scripts/eval/analyze_players.py --tracks X.tracks.npz \
       [--gt match.tdproj --gt-fps 59.94] [--cfg '{"threshold":0.65,"hybrid_min_duration_sec":1.0,"end_pad_sec":1.6}'] \
-      [--json-out out.json]
+      [--geometry court.json] [--json-out out.json]
+
+Serve side (deuce / ad): visual from the court geometry (--geometry = a
+preprocessing.court_lines.compute_court_geometry JSON in the dump's reference pixels,
+else the dump's `geometry_json` key) vs the score parity of the point's index in its
+game (scoreboard game ids with --gt, else the label-free server-sequence segmentation);
+the agreement table is analysis.serve_side.cross_check. "clip parity" counts every
+clip as a point; the default merges a clip starting < same_point_gap_s after the
+previous one (first-serve fault clipped separately).
 
 Points: the tdproj clips when --gt is given (analysis scored on true points), else the
 heatmap decode of the dumped tracks (manifest params from the dump + --cfg overrides).
@@ -34,6 +42,7 @@ from analysis.players import (
     analyze_points,
     serve_consistency,
 )
+from analysis.serve_side import cross_check, score_serve_sides
 from infer.heatmap_decode import HeatmapDecodeConfig, decode_heatmap_segments
 
 
@@ -208,6 +217,35 @@ def score_decoded(rows, points, gt_points, ref):
             "identity_acc_relabelled": round(id_acc, 3)}
 
 
+def _fmt_agree(a):
+    return f"{a['agree']}/{a['n']} = {a['agreement']}" if a["n"] else "n/a"
+
+
+def print_serve_side(rows, check, game_ids):
+    print(f"serve side: visual {check['n_visual']}/{check['n_points']}, score {check['n_score']}, "
+          f"final source {check['final_source']}")
+    print(f"  visual vs score agreement: all {_fmt_agree(check['overall'])}, "
+          f"confident {_fmt_agree(check['confident'])}")
+    for k, v in check["by_server"].items():
+        print(f"    server {k:4s}: {_fmt_agree(v)}")
+    for k, v in check["by_visual_source"].items():
+        if v["n"]:
+            print(f"    visual from {k:8s}: {_fmt_agree(v)}")
+    if game_ids is not None:
+        clip = score_serve_sides(game_ids)  # every clip = one point
+        pairs = [(r["serve_side_visual"], c["side"]) for r, c in zip(rows, clip)
+                 if r["serve_side_visual"] and c["side"]]
+        agree = sum(1 for v, c in pairs if v == c)
+        print(f"  clip parity (no fault merge): {agree}/{len(pairs)} = "
+              f"{round(agree / len(pairs), 3) if pairs else None}")
+    vc = check["visual_confidence"]
+    print(f"  visual confidence hist {vc['hist']}, quantiles {vc['quantiles']}")
+    dis = check["disagreements"]
+    print(f"  disagreements ({len(dis)}): " + ", ".join(
+        f"#{d['index']}@{d['start_s']:.0f}s {d['visual']}({d['visual_confidence']:.2f},{d['visual_source']})"
+        f"!={d['score']}" for d in dis))
+
+
 def decode_points(d, cfg_over):
     params = {}
     if "params" in d.files:
@@ -230,6 +268,7 @@ def main():
     ap.add_argument("--gt-fps", type=float, default=59.94)
     ap.add_argument("--cfg", default=None, help="JSON HeatmapDecodeConfig overrides (decoded points only)")
     ap.add_argument("--player-cfg", default=None, help="JSON PlayerAnalysisConfig overrides")
+    ap.add_argument("--geometry", default=None, help="court geometry JSON (default: the dump's geometry_json)")
     ap.add_argument("--json-out", default=None)
     ap.add_argument("--verbose", action="store_true", help="print one line per point")
     ap.add_argument("--decoded", action="store_true", help="with --gt: analyse decoded points, score matched ones")
@@ -249,9 +288,12 @@ def main():
         points, source = gt_points, "gt"
     else:
         points, source = decode_points(d, json.loads(a.cfg) if a.cfg else None), "decoded"
-    rows = analyze_points(points, tracks, pcfg)
-    cons = serve_consistency(rows)
+    geometry = json.load(open(a.geometry, encoding="utf-8")) if a.geometry else tracks.geometry
     ref = scoreboard_reference(gt_points, sb) if sb else None
+    game_ids = [r["game"] for r in ref] if ref and source == "gt" else None
+    rows = analyze_points(points, tracks, pcfg, geometry=geometry, game_ids=game_ids)
+    cons = serve_consistency(rows)
+    serve_check = cross_check(rows)
     scored = score_against_reference(rows, ref) if ref and source == "gt" else None
     scored_decoded = score_decoded(rows, points, gt_points, ref) if ref and source == "decoded" else None
 
@@ -279,6 +321,10 @@ def main():
               f"R {scored['side_change_R']} (gt {len(scored['side_changes_gt'])}, pred {len(scored['side_changes_pred'])})")
     if scored_decoded:
         print(f"vs scoreboard (decoded points matched to GT): {scored_decoded}")
+    if geometry is None:
+        print("serve side: no court geometry (pass --geometry or re-dump with geometry_json)")
+    print(f"serve side score source: {'scoreboard game ids' if game_ids is not None else 'server-sequence segmentation'}")
+    print_serve_side(rows, serve_check, game_ids)
     if a.verbose:
         gts = scored["_gt_sides"] if scored else [None] * n
         ref = ref if scored else None
@@ -287,9 +333,13 @@ def main():
             print(f"  {i:3d} {r['start_s']:8.1f}-{r['end_s']:7.1f} srv {str(r['server']):5s} "
                   f"({r['server_confidence']:.2f}) gt {str(g):5s} near {r['near_id']} "
                   f"chg {int(r['side_change_before'])} gtswap {int(ref_i.get('ends_swapped', 0))} "
-                  f"game {ref_i.get('game', '-')} np {r['near_present_frac']:.2f}")
+                  f"game {ref_i.get('game', '-')} np {r['near_present_frac']:.2f} | side "
+                  f"{str(r['serve_side']):5s} ({r['serve_side_confidence']:.2f} {r['serve_side_source']}) "
+                  f"vis {str(r['serve_side_visual']):5s} ({r['serve_side_visual_confidence']:.2f}) "
+                  f"score {str(r['serve_side_score']):5s} agree {r['serve_side_agree']}")
     if a.json_out:
-        out = {"tracks": a.tracks, "source": source, "points": rows, "consistency": cons}
+        out = {"tracks": a.tracks, "source": source, "points": rows, "consistency": cons,
+               "serve_side_check": serve_check}
         if scored:
             out["scoreboard_eval"] = {k: v for k, v in scored.items() if not k.startswith("_")}
         if scored_decoded:
