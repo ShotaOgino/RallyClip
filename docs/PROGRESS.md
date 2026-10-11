@@ -1,26 +1,43 @@
 # PROGRESS — overwrite me at every session end
 
-_Last updated: 2026-10-12 (session: Phase 2 stroke pseudo-labels on beta-tennis 2R, branch
-`feat/shot-labels-2r` off `feat/port-v050-analysis`, worktree `~/Documents/RallyClip-v060-labels`).
-The port state below is unchanged._
+_Last updated: 2026-10-12 (session: Phase 2 stroke-rule fixes, branch `feat/stroke-fixes` off
+`feat/shot-labels-2r`, worktree `~/Documents/RallyClip-v060-strokefix`). The port state below
+is unchanged._
 
-## This session: stroke labels (see DECISIONS 2026-10-12)
+## This session: stroke-rule fixes (see DECISIONS 2026-10-12 "Phase 2 stroke rules")
 
-- New: `scripts/eval/export_shot_frames.py` (3-crop PNG strip per near swing, PyAV, one
-  seek per point; `--hand` counterfactual), `scripts/eval/score_stroke_labels.py`,
-  `tests/test_stroke_labels.py` (+ `test_shots.py`: 32 passed), `labels/` (README,
-  2R `events.csv` + `shot_labels.csv`). Full default gate NOT run (machine loaded by other
-  jobs); targeted tests + compileall only.
-- **Labels are model pseudo-labels (`claude-opus-pseudo`), human verification pending.**
-  186 events: serve 54, forehand 52, no_swing 38, backhand 26, unknown 15, overhead 1.
-- Rule classifier on 2R: in-point accuracy 0.361 (merged shots 0.402); serve P 1.0 / R 0.66;
-  FH/BH swapped 43/56 because `estimate_handedness` says `left` while both players are
-  right-handed; with `--hand right`: in-point 0.566, merged 0.637. Volley rule: 23
-  in-point predictions, 0 real. False events 7 % in points, 65 % between points.
-- PNGs (not in git) were in the session scratchpad; regenerate with the exporter (README).
+- Measured only against the 2R **model pseudo-labels** (human verification pending), one
+  match, no hold-out. In-point accuracy 0.361 -> **0.828** (merged 0.871, all 0.774):
+
+  | step | in-point | merged | all |
+  |---|---|---|---|
+  | baseline | 0.361 | 0.402 | 0.346 |
+  | A serve-geometry handedness | 0.566 | 0.637 | 0.556 |
+  | A image-side FH/BH (`lr_source="image"`) | 0.648 | 0.735 | 0.632 |
+  | B serve toss/contact pairs | 0.730 | 0.745 | 0.707 |
+  | C volley off | 0.795 | 0.824 | 0.767 |
+  | D swing gate (0.65 x own median peak) | 0.787 | 0.822 | 0.737 |
+  | overhead: pre-peak sample only | 0.828 | 0.871 | 0.774 |
+
+  False events among detected: in-point 0.070 -> 0.045, between 0.651 -> 0.583; swing
+  recall in-point 0.962, all 0.932. E (learned model) skipped: accuracy >= 0.7 after A-D.
+- Handedness bug: YOLO labels the near player's wrists by image side (racket wrist turns
+  "left" when it crosses the body), so the fastest-wrist estimator said `left` for two
+  right-handers. New estimator: the overhead hand's side of the head on serves (label-free,
+  `CAMERA_RIGHT_SIGN`), 32/32 votes on 2R, fallback `right` at low confidence, override.
+- Code: `src/analysis/shots.py` (estimator, `lr_source` flag, image FH/BH, overhead,
+  `collapse_serve_pairs`, `volley_enabled=False`, `match_swing_reference` + gate),
+  `scripts/eval/export_shot_frames.py` (`--relabel`, gate + toss wiring),
+  `score_stroke_labels.py` (detection section, `none`), `score_shots.py` (`--hand-near/far`,
+  evidence print), `export_shot_clips.py` (new API). Tests: `test_shots.py` 33,
+  `test_stroke_labels.py`, `test_players.py`: 72 passed; compileall exit 0.
+- Full default gate: see the session report (run only if the machine load allowed).
 
 ## Repo state
 
+- Branch chain (all on `origin`, no PRs): `feat/port-v050-analysis` -> `feat/shot-labels-2r`
+  (labels + eval tooling) -> `feat/stroke-fixes` (this session; worktree
+  `~/Documents/RallyClip-v060-strokefix`).
 - Fork `ShotaOgino/RallyClip` (`origin`; `upstream` = `iroblesrazzaq/RallyClip`, read-only).
   Branch **`feat/port-v050-analysis`**, branched from `origin/feat/runtime-v060` (9dd5ad1,
   same as upstream). Worktree `~/Documents/RallyClip-v060-port`; the clone
@@ -86,17 +103,17 @@ and its README / pyproject edits (none were part of the work).
 
 ## Next steps
 
-1. User: review the branch / decide on a PR to upstream (`feat/runtime-v060` or `main`).
-2. Re-dump the five beta-tennis matches with `scripts/eval/dump_heatmap_tracks.py` on this
-   branch (logs/eval/beta-tennis/v060/), confirm jp-junior on 1R/3R/SF/P1R (only 2R was
-   measured), and re-run `analyze_players.py` / `score_shots.py`.
-3. Far player: take the `feat/far-crop-upscale` result (upscaled, geometry-driven crop);
-   if far presence inside points >= 70%, re-run Phase 1/2 with far evidence (server by
-   observation, far strokes) and retire `score_shots.py::_far_from_raw`.
-4. Phase 2: human pass over `labels/2026_08_24_2R_*.shot_labels.csv` (low / unknown
-   first); then fix handedness (`estimate_handedness` says `left` on 2R: free arm or a pose L/R swap, not diagnosed; per player
-   via Phase 1 identity, or from the serve arm), tighten the volley rule, and keep the
-   contact (not the toss) when the same-side merge collapses a serve pair. Label a second
-   match.
-5. Phase 1: tiebreak side changes (every 6 points, no gap).
-6. Widen the eval set beyond one player / venue.
+1. User: review `feat/stroke-fixes` (pushed, no PR) / decide on PRs to upstream.
+2. Human pass over `labels/2026_08_24_2R_*.shot_labels.csv` (low / unknown first), then
+   re-score with `--relabel` (labels/README). Label a second match (another player /
+   venue, ideally a left-hander) before trusting any threshold; all of today's rules were
+   checked on one match.
+3. Phase 2 open items: second serve after a fault inside one point (3 events on 2R);
+   real overheads (1 on 2R, missed); between-point false events (walking / towel) need
+   something beyond peak speed; per-player handedness via Phase 1 identity (`override`).
+4. Re-dump the five beta-tennis matches on this branch (logs/eval/beta-tennis/v060/),
+   confirm jp-junior on 1R/3R/SF/P1R (only 2R measured), re-run `analyze_players.py` /
+   `score_shots.py`.
+5. Far player: take the `feat/far-crop-upscale` result; if far presence inside points
+   >= 70%, re-run Phase 1/2 with far evidence and retire `score_shots.py::_far_from_raw`.
+6. Phase 1: tiebreak side changes (every 6 points, no gap).
