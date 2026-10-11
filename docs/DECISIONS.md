@@ -943,3 +943,81 @@ before trusting accuracy deltas; the 10-min segment count is unchanged so far.
   labelling (anchoring); counting a predicted `unknown` as abstention outside accuracy
   (it is reported as coverage instead); fixing `estimate_handedness` / the volley rule in
   this change (measurement only, see PROGRESS next steps).
+
+## 2026-10-12 — Phase 2 stroke rules: serve-geometry handedness, image-side left/right, serve pairs, volley off, swing gate
+
+- **Context:** the 2R pseudo-labels (entry above) put the rule classifier at in-point
+  accuracy 0.361. Each change below was re-scored on the same 186 labelled events with
+  `export_shot_frames.py --relabel` (new, no video) + `score_stroke_labels.py` (now with a
+  detection section). The pseudo-labels were the only signal; every rule has its physical
+  rationale in its docstring in `src/analysis/shots.py`.
+- **Handedness bug (diagnosed on keypoint overlays of 2R frames):** YOLO labels the near
+  player's wrists mostly by *image side*, not by arm. The racket wrist is "right" while it
+  is camera-right of the body and becomes "left" when it crosses over (serve and forehand
+  follow-through), and both wrist labels often sit on one arm (the toss arm). Shoulders,
+  hips and ears are ordered against the back-view convention in ~20 % of near frames
+  (part real rotation in the serve, part whole-skeleton flips). The old estimator (wrist
+  with the higher 95th-percentile speed) therefore saw the fast follow-through as "left"
+  (left 8.55 / right 8.15 bs/s) and said `left` for two right-handers. Per-frame L/R
+  canonicalisation by torso order (tried: simple and a 2-state Viterbi with continuity)
+  did not fix it (still `left`, ratio 1.07) because the serve's shoulder turn is real.
+- **Decision A (handedness):** `estimate_handedness` / `match_handedness` now use the serve
+  geometry, label-free: whenever a hand is > `overhead_margin` above the head (toss arm at
+  the top, racket arm at contact) the highest hand, by height not label, is on the
+  hitting-arm side of the head; its image x offset is mapped to the player's own side with
+  `CAMERA_RIGHT_SIGN` (near = back view, +1; far = front view, -1). One vote per serve
+  window (points known) or per overhead episode; confidence = |R - L| / (votes + 2);
+  below `handedness_min_confidence` (0.3) or with no vote -> `right` (population prior) at
+  that low confidence; `override={"near": "left"}` wins (score_shots `--hand-near/far`,
+  exporter `--hand`). 2R near: right, 32/32 serve windows, conf 0.94 (no points: 48/5,
+  conf 0.78); far: no overhead evidence -> fallback right, conf 0.
+- **Decision A (left/right convention flag):** `ShotParams.lr_source = "image"` (default):
+  no rule reads the COCO L/R labels for a side decision. Forehand/backhand = mean lateral
+  offset of the hands' centroid (whichever wrists are measurable) from the body midline
+  over `[t - fbh_prep_sec (0.4), t]` (back-swing to contact; the follow-through crosses
+  the body), mapped by `CAMERA_RIGHT_SIGN` and mirrored for a lefty. Overhead = either
+  hand above the head at the sample at/before the speed peak (after the peak is a
+  forehand follow-through). `lr_source = "labels"` keeps the old label rules.
+  FH/BH variants measured on the 78 labelled FH/BH events (hand right): window centroid
+  0.846, pre-peak sample 0.795, post-peak sample 0.36, label rule 0.69 of predicted.
+- **Decision B (serve pairs):** `collapse_serve_pairs` runs before the generic same-side
+  suppression: a side's first event within `serve_window_sec` of the start that shows the
+  serve posture (hand overhead within -0.5..+`toss_post_sec` 0.5 s: the toss hand tops out
+  after the arm's speed peak) plus its next event within `serve_pair_sec` = 1.5 s -> keep
+  the later (contact; the ball must be tossed before it is struck), stroke serve, report
+  the dropped toss in `serve_tosses` (the exporter predicts it `serve`; part of B's gain
+  is this scoring of the toss, which the labels mark as part of the serve). 1.5 s, not the
+  2.5 s first suggested: toss -> contact was 0.8-1.25 s on 2R and the server's next real
+  shot >= 2.3 s, so 2.5 s could pair the serve with the first rally ball (2.5 gave the
+  same score on 2R). The contact needs no posture of its own (at 5 fps the racket is
+  overhead for ~1 sample).
+- **Decision C (volley):** off by default (`volley_enabled = False`). A volley is defined by
+  the ball not bouncing, which pose cannot see; the rule fired 23x in points, precision
+  0, and the labels contain no volley at all, so no tighter rule can be validated. Turn on
+  again with ball tracking (Phase 3).
+- **Decision D (swing gate):** `detect_swings(speed_ref=)` drops peaks below
+  `swing_gate_rel` (0.65) x the side's median in-point swing peak
+  (`match_swing_reference`, >= 10 swings, else no gate). Peak speed was the most
+  separating feature (AUC swing vs no_swing 0.88; wrist travel 0.86, event confidence
+  0.80, arm extension 0.58, body translation 0.43). 0.65 = largest value keeping >= 95 %
+  of labelled in-point swings (criterion fixed before choosing; no hold-out).
+- **Results (in-point accuracy / merged / all; FE = no_swing share of detected events):**
+  baseline 0.361 / 0.402 / 0.346; A handedness 0.566 / 0.637 / 0.556; A image FH/BH
+  0.648 / 0.735 / 0.632; B serve pairs 0.730 / 0.745 / 0.707; C volley off 0.795 / 0.824 /
+  0.767; D gate 0.787 / 0.822 / 0.737 (FE in-point 0.070 -> 0.045, between 0.651 ->
+  0.583, overall 0.204 -> 0.127; swing recall in-point 0.962, between 0.667, all 0.932);
+  overhead pre-peak only 0.828 / 0.871 / 0.774 (final). `lr_source = "labels"` with
+  everything else final: 0.697. Serve P 1.0 / R 0.86; FH/BH 58/65 correct.
+- **E (learned model): not done.** The plan said to try a small learned classifier only if
+  in-point accuracy stayed < 0.7 after A-D; it reached 0.79-0.83.
+- **Limits:** one match, two right-handed juniors, one camera, model pseudo-labels from the
+  same model family, every threshold checked on the same labels (no hold-out). Left-handed
+  serve geometry is mirrored by construction, not observed. Second serves after a fault
+  inside one point (3 events) and the one real overhead are still missed. Between points
+  the gate removes only ~half of the false events (walking / towel / ball bouncing are
+  not much slower than a stroke at 5 fps).
+- **Rejected:** per-frame L/R canonicalisation by torso order (serve rotation is real; did
+  not change the estimate); keeping the speed estimator with a tie-break; requiring the serve
+  posture on the contact too (missed at 5 fps; with it and a 2.5 s window: 0.672, toss
+  posture only + 1.5 s: 0.689, + the toss look-ahead and toss reporting: 0.730); tightening the volley rule (nothing to validate it on); a two-feature gate (too
+  few no_swing events, 38, to fit more than one threshold honestly).

@@ -3,6 +3,8 @@
 PYTHONPATH=src $PY scripts/eval/export_shot_frames.py --tracks X.tracks.npz --video V.mp4
     --gt match.tdproj --out-dir D [--n 300] [--seed 0] [--side near] [--include-between]
     [--hand left|right]
+PYTHONPATH=src $PY scripts/eval/export_shot_frames.py --tracks X.tracks.npz --gt match.tdproj
+    --out-dir D --relabel labels/<match>.events.csv [--include-between] [--hand left|right]
 
 Population (all on the chosen side, motion events only, never prior-filled ones):
 
@@ -11,7 +13,8 @@ Population (all on the chosen side, motion events only, never prior-filled ones)
   marks the swings that survive as shots of ``analyze_point_shots`` (their predicted
   stroke is the one it returns); ``merged=0`` swings were dropped by the opponent
   de-dupe / same-side suppression and are classified with ``classify_stroke`` in the
-  same context, so labels also tell whether the merge dropped real shots.
+  same context, so labels also tell whether the merge dropped real shots. A swing the
+  merge dropped as the toss of a serve (``serve_tosses``) is predicted ``serve``.
 * ``--include-between``: swings detected in the gaps between GT points
   (``point_index=-1``; no serve context). They measure what the detector fires on when
   the point boundaries are loose; they are kept apart in the scorer.
@@ -28,6 +31,15 @@ the frame; the three crops are tiled side by side into ``<event_id>.png`` (~1200
 labelled "-0.25s / 0 / +0.25s"). File names carry nothing but the event id, so a labeller
 looking at the PNGs does not see the prediction.
 
+``--relabel OLD_EVENTS_CSV`` (no video, no PNGs): re-runs the current detector and rules on
+the same dump and writes ``events.csv`` for the *labelled* event set, so a rule change can be
+re-scored against existing labels. Each old event keeps its id, ``t``, ``point_index`` and
+``in_point``; it is matched one-to-one to the nearest current swing within
+``RELABEL_TOL_SEC`` (``detected=1``, new ``predicted_stroke`` / ``merged`` / ``arm``), else it
+gets ``predicted_stroke=none`` and ``detected=0`` (the current detector no longer fires
+there: right for a ``no_swing`` label, a missed swing otherwise). Current swings with no
+labelled event are only counted (they have no label to score against).
+
 Outputs in --out-dir: ``events.csv`` (event_id, t, point_index, in_point, merged,
 predicted_stroke, confidence, event_confidence, arm, assumed_hand, crop, png) and
 ``labels.csv`` (event_id, t, point_index, label, handedness, label_confidence, labeller,
@@ -43,7 +55,7 @@ import os
 import sys
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Dict, List, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -60,6 +72,7 @@ from analysis.shots import (  # noqa: E402
     classify_stroke,
     detect_swings,
     match_handedness,
+    match_swing_reference,
 )
 from score_shots import load_points  # noqa: E402
 
@@ -70,6 +83,8 @@ MIN_ASPECT = 0.75  # crop width / height
 TILE_W = 400
 EVENT_FIELDS = ["event_id", "t", "point_index", "in_point", "merged", "predicted_stroke", "confidence",
                 "event_confidence", "arm", "assumed_hand", "crop", "png"]
+RELABEL_FIELDS = EVENT_FIELDS + ["detected"]
+RELABEL_TOL_SEC = 0.15  # < half the 0.6 s refractory period, ~one 5 fps sample
 LABEL_FIELDS = ["event_id", "t", "point_index", "label", "handedness", "label_confidence", "labeller", "notes"]
 
 
@@ -141,15 +156,14 @@ def event_box(tracks, side: str, t: float, scale: Tuple[float, float], window: f
 
 
 def collect_swings(tracks, points, side: str = "near", include_between: bool = False,
-                   hand_override: Optional[str] = None) -> List[dict]:
+                   hand_override: Optional[str] = None, params=None) -> List[dict]:
     """Pre-merge motion swings of ``side`` (see module docstring), time-sorted.
 
     ``hand_override`` replaces the match-level handedness estimate for ``side`` (a
     counterfactual: the swing set is unchanged, only the stroke rules see another arm)."""
-    p = DEFAULT_PARAMS
-    hand = match_handedness(tracks, p)
-    if hand_override:
-        hand[side] = hand_override
+    p = DEFAULT_PARAMS if params is None else params
+    hand = match_handedness(tracks, p, points=points, override={side: hand_override} if hand_override else None)
+    ref = match_swing_reference(tracks, points, p, handedness=hand)
     ts = np.asarray(tracks["timestamps"], dtype=np.float64)
     kp, kc, pres, box = _side_arrays(tracks, side)
 
@@ -167,15 +181,19 @@ def collect_swings(tracks, points, side: str = "near", include_between: bool = F
         if w is None:
             continue
         evs = [x for x in detect_swings(w.kp, w.kpconf, w.present, w.timestamps, side=side, box=w.box,
-                                        handedness=hand.get(side), params=p) if s - 0.2 <= x.t <= e]
-        shots = [sh for sh in analyze_point_shots((s, e), tracks, handedness=hand, params=p)["shots"]
-                 if sh["source"] == "motion" and sh["player_side"] == side]
+                                        handedness=hand.get(side), speed_ref=ref.get(side), params=p)
+               if s - 0.2 <= x.t <= e]
+        res = analyze_point_shots((s, e), tracks, handedness=hand, speed_ref=ref, params=p)
+        shots = [sh for sh in res["shots"] if sh["source"] == "motion" and sh["player_side"] == side]
+        tosses = {x["t"] for x in res.get("serve_tosses", []) if x["player_side"] == side}
         feet = np.where(w.present, w.box[:, 3], np.nan) if w.box is not None else None
         base = float(np.nanpercentile(feet, 90)) if feet is not None and np.isfinite(feet).any() else None
         for j, ev in enumerate(evs):
             hit = next((sh for sh in shots if abs(sh["t"] - round(ev.t, 3)) < 1e-6), None)
             if hit is not None:
                 stroke, conf = hit["stroke"], hit["stroke_confidence"]
+            elif round(ev.t, 3) in tosses:  # dropped by the merge as the toss of a serve
+                stroke, conf = "serve", 0.5
             else:
                 st = classify_stroke(ev, w, point_start=s, is_first_of_side=(j == 0), handedness=hand.get(side),
                                      baseline_foot_y=base, params=p)
@@ -193,7 +211,7 @@ def collect_swings(tracks, points, side: str = "near", include_between: bool = F
             if w is None:
                 continue
             for ev in detect_swings(w.kp, w.kpconf, w.present, w.timestamps, side=side, box=w.box,
-                                    handedness=hand.get(side), params=p):
+                                    handedness=hand.get(side), speed_ref=ref.get(side), params=p):
                 if not (lo + 0.2 <= ev.t <= hi - 0.2):
                     continue
                 st = classify_stroke(ev, w, point_start=None, handedness=hand.get(side), params=p)
@@ -203,6 +221,34 @@ def collect_swings(tracks, points, side: str = "near", include_between: bool = F
                             "assumed_hand": hand.get(side)})
     out.sort(key=lambda r: r["t"])
     return out
+
+
+def relabel_events(old_rows: Sequence[Mapping[str, str]], current: Sequence[dict],
+                   tol: float = RELABEL_TOL_SEC) -> Tuple[List[dict], int]:
+    """Map the current swings onto the labelled (old) event set; see the module docstring.
+
+    Greedy one-to-one matching in order of time distance. Returns (rows, n_unmatched_current).
+    """
+    pairs = sorted((abs(float(o["t"]) - c["t"]), i, j) for i, o in enumerate(old_rows)
+                   for j, c in enumerate(current) if abs(float(o["t"]) - c["t"]) <= tol)
+    used_o, used_c, match = set(), set(), {}
+    for _, i, j in pairs:
+        if i in used_o or j in used_c:
+            continue
+        used_o.add(i)
+        used_c.add(j)
+        match[i] = j
+    rows = []
+    for i, o in enumerate(old_rows):
+        base = {k: o.get(k, "") for k in ("event_id", "t", "point_index", "in_point", "crop", "png")}
+        if i in match:
+            c = current[match[i]]
+            rows.append({**base, **{k: c[k] for k in ("merged", "predicted_stroke", "confidence", "event_confidence",
+                                                      "arm", "assumed_hand")}, "detected": 1})
+        else:
+            rows.append({**base, "merged": 0, "predicted_stroke": "none", "confidence": 0.0, "event_confidence": 0.0,
+                         "arm": "", "assumed_hand": current[0]["assumed_hand"] if current else "", "detected": 0})
+    return rows, len(current) - len(used_c)
 
 
 def stratified_pick(events: Sequence[dict], n: int, seed: int = 0, key: str = "predicted_stroke") -> List[int]:
@@ -305,7 +351,7 @@ def find_tdproj(path: str) -> str:
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--tracks", required=True)
-    ap.add_argument("--video", required=True)
+    ap.add_argument("--video", default=None, help="source video (required unless --relabel)")
     ap.add_argument("--gt", required=True, help=".tdproj (or its directory) / segment CSV with the points")
     ap.add_argument("--gt-fps", type=float, default=59.94)
     ap.add_argument("--out-dir", required=True)
@@ -315,14 +361,34 @@ def main(argv=None):
     ap.add_argument("--include-between", action="store_true", help="also swings between GT points (point_index -1)")
     ap.add_argument("--hand", choices=["left", "right"], default=None,
                     help="override the estimated handedness of --side (counterfactual stroke rules)")
+    ap.add_argument("--relabel", default=None, metavar="OLD_EVENTS_CSV",
+                    help="no video: re-predict the labelled events of this events.csv with the current rules")
     a = ap.parse_args(argv)
-    import cv2  # PNG write (image op)
+    if not a.relabel and not a.video:
+        ap.error("--video is required unless --relabel is given")
 
     tracks = dict(np.load(a.tracks, allow_pickle=True))
     if f"{a.side}_kp" not in tracks:
         raise SystemExit(f"{a.tracks}: no player keys; re-dump with scripts/eval/dump_heatmap_tracks.py")
     points, _ = load_points(tracks, find_tdproj(a.gt), a.gt_fps)
     events = collect_swings(tracks, points, a.side, a.include_between, a.hand)
+    if a.relabel:
+        with open(a.relabel, newline="") as f:
+            old = list(csv.DictReader(f))
+        rows, extra = relabel_events(old, events)
+        out = Path(a.out_dir)
+        out.mkdir(parents=True, exist_ok=True)
+        with open(out / "events.csv", "w", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=RELABEL_FIELDS)
+            w.writeheader()
+            w.writerows({k: r.get(k, "") for k in RELABEL_FIELDS} for r in rows)
+        n_det = sum(r["detected"] for r in rows)
+        print(f"relabel: {len(rows)} labelled events, {n_det} still detected, {len(rows) - n_det} not detected; "
+              f"{extra} current swings without a labelled event; assumed hand {events[0]['assumed_hand'] if events else '?'}"
+              f" -> {out / 'events.csv'}")
+        return rows
+    import cv2  # PNG write (image op)
+
     pick = [events[i] for i in stratified_pick(events, a.n, a.seed)]
     for k, ev in enumerate(pick, 1):
         ev["event_id"] = f"ev{k:04d}"

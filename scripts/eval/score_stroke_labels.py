@@ -24,6 +24,12 @@ Reported per subset (default: every subset that has rows):
 * forehand/backhand: among events labelled forehand or backhand and predicted forehand
   or backhand, correct vs swapped, broken down by (observed handedness, the detector's
   assumed hand) and by the event's arm (the wrist that carried the swing).
+* detection (only when the events file has a ``detected`` column, i.e. it was written by
+  ``export_shot_frames.py --relabel``): an event the current detector no longer fires on
+  has ``predicted_stroke = none``. Reported: false-event rate among the events still
+  detected (no_swing / detected), how many labelled no_swing events were rejected, and the
+  recall of labelled swings (every label except no_swing). In accuracy a ``none`` counts
+  as wrong, like ``unknown``.
 """
 from __future__ import annotations
 
@@ -34,7 +40,7 @@ from collections import Counter, defaultdict
 from typing import Dict, List, Optional
 
 STROKES = ["serve", "forehand", "backhand", "volley", "overhead"]
-PRED_COLS = STROKES + ["unknown"]
+PRED_COLS = STROKES + ["unknown", "none"]
 LABEL_ROWS = STROKES + ["unknown", "no_swing"]
 SUBSETS = {
     "all": lambda r: True,
@@ -70,7 +76,7 @@ def _ratio(a: int, b: int) -> Optional[float]:
 def accuracy(rows: List[dict]) -> Dict[str, object]:
     g = [r for r in rows if r["label"] in STROKES]
     correct = sum(r["predicted_stroke"] == r["label"] for r in g)
-    covered = [r for r in g if r["predicted_stroke"] != "unknown"]
+    covered = [r for r in g if r["predicted_stroke"] not in ("unknown", "none")]
     return {"n": len(g), "correct": correct, "accuracy": _ratio(correct, len(g)),
             "coverage": _ratio(len(covered), len(g)),
             "accuracy_when_predicted": _ratio(sum(r["predicted_stroke"] == r["label"] for r in covered), len(covered))}
@@ -115,10 +121,26 @@ def fh_bh_breakdown(rows: List[dict]) -> Dict[str, object]:
             "assumed_hand": dict(Counter(r.get("assumed_hand") or "?" for r in rows))}
 
 
+def detection(rows: List[dict]) -> Optional[Dict[str, object]]:
+    """Gate / detector effect on the labelled events (None without a ``detected`` column)."""
+    if not rows or "detected" not in rows[0] or rows[0]["detected"] in (None, ""):
+        return None
+    det = [r for r in rows if str(r["detected"]) == "1"]
+    swings = [r for r in rows if r["label"] != "no_swing"]
+    false = [r for r in rows if r["label"] == "no_swing"]
+    return {"labelled": len(rows), "detected": len(det),
+            "false_event_rate_detected": _ratio(sum(r["label"] == "no_swing" for r in det), len(det)),
+            "no_swing_rejected": sum(str(r["detected"]) != "1" for r in false), "no_swing_labelled": len(false),
+            "swing_recall": _ratio(sum(str(r["detected"]) == "1" for r in swings), len(swings)),
+            "stroke_recall": _ratio(sum(str(r["detected"]) == "1" for r in swings if r["label"] in STROKES),
+                                    sum(r["label"] in STROKES for r in swings))}
+
+
 def score(rows: List[dict]) -> Dict[str, object]:
     n = len(rows)
     not_low = [r for r in rows if r["label_confidence"] != "low"]
     return {
+        "detection": detection(rows),
         "labelled": n,
         "label_distribution": dict(Counter(r["label"] for r in rows).most_common()),
         "prediction_distribution": dict(Counter(r["predicted_stroke"] for r in rows).most_common()),
@@ -140,6 +162,11 @@ def print_report(name: str, s: Dict[str, object]) -> None:
     p(f"predictions: {s['prediction_distribution']}")
     p(f"false events (no_swing): {s['false_event_fraction']}  unclear (unknown): {s['unclear_fraction']}  "
       f"duplicates: {s['duplicate_fraction']}")
+    d = s.get("detection")
+    if d:
+        p(f"detection: {d['detected']}/{d['labelled']} still detected; false-event rate among detected "
+          f"{d['false_event_rate_detected']}; no_swing rejected {d['no_swing_rejected']}/{d['no_swing_labelled']}; "
+          f"swing recall {d['swing_recall']} (stroke-labelled {d['stroke_recall']})")
     for key in ("accuracy", "accuracy_excluding_low_conf_labels"):
         a = s[key]
         p(f"{key}: {a['correct']}/{a['n']} = {a['accuracy']}  coverage {a['coverage']}  "

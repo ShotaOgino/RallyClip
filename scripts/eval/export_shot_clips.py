@@ -27,7 +27,7 @@ for _p in (_HERE.parents[1] / "src", _HERE):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
-from analysis.shots import SIDES, analyze_point_shots, match_handedness  # noqa: E402
+from analysis.shots import SIDES, analyze_point_shots, match_handedness, match_swing_reference  # noqa: E402
 from score_shots import load_points, prepare_far_track  # noqa: E402
 
 FIELDS = ["event_id", "clip", "t", "side", "source", "predicted_stroke", "stroke_confidence",
@@ -35,10 +35,11 @@ FIELDS = ["event_id", "clip", "t", "side", "source", "predicted_stroke", "stroke
 
 
 def collect_events(tracks, points, include_prior=False):
-    hand = match_handedness(tracks)
+    hand = match_handedness(tracks, points=points)
+    ref = match_swing_reference(tracks, points, handedness=hand)
     events = []
     for s, e in points:
-        r = analyze_point_shots((s, e), tracks, handedness=hand)
+        r = analyze_point_shots((s, e), tracks, handedness=hand, speed_ref=ref)
         for shot in r["shots"]:
             if shot["source"] != "motion" and not include_prior:
                 continue

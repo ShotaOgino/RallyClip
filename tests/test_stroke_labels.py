@@ -170,3 +170,49 @@ def test_committed_pseudo_labels_are_well_formed():
         assert r["label"] in vocab and r["label_confidence"] in {"high", "medium", "low"}
         assert r["handedness"] in {"", "left", "right"} and r["labeller"] == "claude-opus-pseudo"
         assert not r["dup_of"] or r["dup_of"] in ids
+
+
+# ------------------------------------------------------------------ relabel + detection
+
+
+def test_relabel_events_matches_by_time_and_marks_undetected(exporter):
+    old = [{"event_id": "e1", "t": "10.0", "point_index": "0", "in_point": "1", "png": "e1.png"},
+           {"event_id": "e2", "t": "12.0", "point_index": "0", "in_point": "1"},
+           {"event_id": "e3", "t": "30.0", "point_index": "-1", "in_point": "0"}]
+    cur = [{"t": 10.1, "merged": 1, "predicted_stroke": "serve", "confidence": 0.8, "event_confidence": 0.7,
+            "arm": "right", "assumed_hand": "right"},
+           {"t": 10.05, "merged": 0, "predicted_stroke": "forehand", "confidence": 0.5, "event_confidence": 0.4,
+            "arm": "left", "assumed_hand": "right"},
+           {"t": 20.0, "merged": 1, "predicted_stroke": "backhand", "confidence": 0.5, "event_confidence": 0.5,
+            "arm": "left", "assumed_hand": "right"}]
+    rows, extra = exporter.relabel_events(old, cur)
+    assert [r["event_id"] for r in rows] == ["e1", "e2", "e3"]
+    assert rows[0]["predicted_stroke"] == "forehand" and rows[0]["detected"] == 1  # nearest wins (0.05 s)
+    assert rows[0]["png"] == "e1.png" and rows[0]["t"] == "10.0"                   # old identity kept
+    assert rows[1]["predicted_stroke"] == "none" and rows[1]["detected"] == 0       # 10.1 is 1.9 s away
+    assert rows[2]["detected"] == 0 and rows[2]["in_point"] == "0"
+    assert extra == 2
+
+
+def test_scorer_detection_section(scorer, csv_pair):
+    labels, events = csv_pair
+    rows = list(csv.DictReader(open(events, newline="")))
+    for r in rows:  # e5 (no_swing) and e6 (backhand) no longer detected
+        gone = r["event_id"] in ("e5", "e6")
+        r["detected"] = "0" if gone else "1"
+        if gone:
+            r["predicted_stroke"] = "none"
+    _write(events, list(rows[0].keys()), rows)
+    out = scorer.main(["--labels", str(labels), "--events", str(events)])
+    d = out["all"]["detection"]
+    assert (d["labelled"], d["detected"], d["no_swing_rejected"], d["no_swing_labelled"]) == (7, 5, 1, 2)
+    assert d["false_event_rate_detected"] == round(1 / 5, 3)
+    assert d["swing_recall"] == round(4 / 5, 3) and d["stroke_recall"] == round(4 / 5, 3)
+    acc = out["all"]["accuracy"]
+    assert (acc["n"], acc["correct"], acc["coverage"]) == (5, 2, 0.8)  # e6: "none" = wrong, not covered (was "unknown")
+    assert out["all"]["confusion"]["backhand"]["none"] == 1
+
+
+def test_scorer_without_detected_column_has_no_detection_section(scorer, csv_pair):
+    labels, events = csv_pair
+    assert scorer.main(["--labels", str(labels), "--events", str(events)])["all"]["detection"] is None

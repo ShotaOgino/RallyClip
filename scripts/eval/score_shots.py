@@ -1,7 +1,8 @@
 """Label-free sanity report for shot events + rule-based stroke types (roadmap Phase 2).
 
 PYTHONPATH=src $PY scripts/eval/score_shots.py --tracks X.tracks.npz [--gt match.tdproj --gt-fps 59.94]
-    [--cfg '{"threshold": 0.65, ...}'] [--server near|far|phase1] --json-out out.json
+    [--cfg '{"threshold": 0.65, ...}'] [--server near|far|phase1] [--hand-near left|right]
+    [--hand-far left|right] --json-out out.json
 
 Points come from --gt (beta-tennis .tdproj, validation != deleted; or a
 segment_id,first_value,last_value CSV in frames at --gt-fps), else from decoding the
@@ -33,7 +34,7 @@ _SRC = Path(__file__).resolve().parents[2] / "src"
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
-from analysis.shots import SIDES, analyze_point_shots, estimate_handedness  # noqa: E402
+from analysis.shots import SIDES, analyze_point_shots, match_handedness_evidence, match_swing_reference  # noqa: E402
 
 RALLY_BINS = [(0, 0), (1, 1), (2, 2), (3, 3), (4, 4), (5, 6), (7, 9), (10, 10**9)]
 DECODE_BASE = dict(mode="hybrid", threshold=0.5, peak_threshold=0.3, sigma_frames=2.5, min_duration_sec=0.3,
@@ -217,7 +218,7 @@ def summarize(points_out):
     }
 
 
-def run(tracks_path, gt=None, gt_fps=59.94, cfg=None, server=None, far_source="auto"):
+def run(tracks_path, gt=None, gt_fps=59.94, cfg=None, server=None, far_source="auto", hand_override=None):
     d = dict(np.load(tracks_path, allow_pickle=True))
     missing = [k for k in ("near_kp", "near_present", "far_kp", "far_present") if k not in d]
     if missing:
@@ -225,10 +226,10 @@ def run(tracks_path, gt=None, gt_fps=59.94, cfg=None, server=None, far_source="a
     d, used, assigned_far = prepare_far_track(d, far_source)
     points, source = load_points(d, gt, gt_fps, cfg)
     ts = np.asarray(d["timestamps"], dtype=np.float64)
-    hand, hand_ratio = {}, {}
-    for side in SIDES:
-        arm, ratio = estimate_handedness(d[f"{side}_kp"], d.get(f"{side}_kpconf"), d[f"{side}_present"], ts, d.get(f"{side}_box"))
-        hand[side], hand_ratio[side] = arm, round(float(ratio), 3)
+    ev = match_handedness_evidence(d, points=points, override=hand_override)
+    hand = {side: ev[side]["arm"] for side in SIDES}
+    hand_conf = {side: {"confidence": ev[side]["confidence"], "source": ev[side]["source"]} for side in SIDES}
+    speed_ref = match_swing_reference(d, points, handedness=hand)
     servers = [server] * len(points)
     if server == "phase1":
         from analysis.players import PlayerTracks, detect_server
@@ -239,7 +240,7 @@ def run(tracks_path, gt=None, gt_fps=59.94, cfg=None, server=None, far_source="a
     out = []
     far_points = 0
     for pt, srv in zip(points, servers):
-        r = analyze_point_shots(pt, d, server=srv, handedness=hand)
+        r = analyze_point_shots(pt, d, server=srv, handedness=hand, speed_ref=speed_ref)
         m = (ts >= pt[0]) & (ts <= pt[1])
         r["far_present_frac"] = round(float(np.mean(d["far_present"][m])), 3) if m.any() else 0.0
         far_points += r["far_present_frac"] >= 0.5
@@ -251,7 +252,7 @@ def run(tracks_path, gt=None, gt_fps=59.94, cfg=None, server=None, far_source="a
     for s, e in points:
         in_point |= (ts >= s) & (ts <= e)
     summary.update({"tracks": str(tracks_path), "points_source": source, "handedness": hand,
-                    "handedness_ratio": hand_ratio, "far_source": used, "far_assigned_present_frac": assigned_far,
+                    "handedness_evidence": hand_conf, "swing_speed_ref": speed_ref, "far_source": used, "far_assigned_present_frac": assigned_far,
                     "present_frac": {s: round(float(np.mean(d[f"{s}_present"])), 3) for s in SIDES},
                     "present_frac_in_points": {s: round(float(np.mean(d[f"{s}_present"][in_point])), 3)
                                                if in_point.any() else None for s in SIDES}})
@@ -266,8 +267,8 @@ def print_report(summary):
       f"(assigned far present {summary['far_assigned_present_frac']})")
     p(f"points with a far track (>=50% of frames): {summary['points_with_far_track']}/{summary['points']}")
     p(f"present near/far: all frames {pf['near']}/{pf['far']}  in points {pi['near']}/{pi['far']}  handedness: "
-      f"near {summary['handedness']['near']} (x{summary['handedness_ratio']['near']}), "
-      f"far {summary['handedness']['far']} (x{summary['handedness_ratio']['far']})")
+      + ", ".join(f"{s} {summary['handedness'][s]} ({summary['handedness_evidence'][s]['source']}, "
+                  f"conf {summary['handedness_evidence'][s]['confidence']})" for s in SIDES))
     sp = summary["shots_per_point"]
     p(f"shots: {summary['shots_total']}  per point mean {sp['mean']} median {sp['median']} p10 {sp['p10']} p90 {sp['p90']}")
     p("rally length hist: " + "  ".join(f"{k}:{v}" for k, v in summary["rally_length_hist"].items()))
@@ -298,6 +299,8 @@ def main(argv=None):
     ap.add_argument("--far-source", default="auto", choices=["auto", "assigned", "raw"],
                     help="far track: the dump's assigned far player, or rebuilt from raw_* detections "
                          "(auto: raw when the assigned far player is present < 20%% of frames)")
+    ap.add_argument("--hand-near", choices=["left", "right"], default=None, help="override near handedness")
+    ap.add_argument("--hand-far", choices=["left", "right"], default=None, help="override far handedness")
     ap.add_argument("--json-out", default=None)
     a = ap.parse_args(argv)
     if a.gt and len(a.tracks) > 1:
@@ -305,7 +308,8 @@ def main(argv=None):
     cfg = json.loads(a.cfg) if a.cfg else None
     results = []
     for t in a.tracks:
-        summary, points = run(t, a.gt, a.gt_fps, cfg, a.server, a.far_source)
+        override = {k: v for k, v in (("near", a.hand_near), ("far", a.hand_far)) if v}
+        summary, points = run(t, a.gt, a.gt_fps, cfg, a.server, a.far_source, override or None)
         print_report(summary)
         results.append({"summary": summary, "points": points})
     if a.json_out:
