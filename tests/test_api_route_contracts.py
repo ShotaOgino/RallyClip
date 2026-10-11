@@ -177,3 +177,37 @@ def test_upload_over_cap_returns_json_413(client, monkeypatch):
     )
     assert resp.status_code == 413
     assert "upload limit" in resp.get_json()["error"]
+
+
+def test_library_points_route_and_player_output_persist(client, monkeypatch, tmp_path):
+    # Phase 1: GUI jobs run with save_player_tracks=True; the engine's
+    # <name>_points.json / _players.npz are moved into the library item and the
+    # points document is served at /api/library/<id>/points (404 when absent).
+    library = tmp_path / "library"
+    item_dir = library / "item-p"
+    item_dir.mkdir(parents=True)
+    (item_dir / "source.mp4").write_bytes(b"\x00")
+    monkeypatch.setattr(gui_app, "LIBRARY_DIR", library)
+
+    resp = client.get("/api/library/item-p/points")
+    assert resp.status_code == 404
+    assert set(resp.get_json()) == {"error"}
+
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+    doc = {"schema": "rallyclip.points/v1", "points": [{"start_s": 1.0, "end_s": 2.0, "server": "near"}]}
+    (job_dir / "m_points.json").write_text(json.dumps(doc), encoding="utf-8")
+    (job_dir / "m_players.npz").write_bytes(b"npz")
+    gui_app._persist_player_outputs(
+        "item-p",
+        {"points_json": str(job_dir / "m_points.json"), "players_npz": str(job_dir / "m_players.npz")},
+    )
+    assert (item_dir / "points.json").is_file() and (item_dir / "players.npz").is_file()
+    assert not (job_dir / "m_points.json").exists()
+
+    resp = client.get("/api/library/item-p/points")
+    assert resp.status_code == 200
+    assert resp.get_json() == doc
+
+    # missing/absent diagnostics are a no-op
+    gui_app._persist_player_outputs("item-p", {"pipeline_id": "x"})

@@ -425,3 +425,25 @@ def test_decode_override_flags_are_supported_by_argparse(monkeypatch, tmp_path):
     args = seen["args"]
     assert (args.threshold, args.merge_gap_sec, args.smooth_sigma_frames,
             args.hybrid_min_duration_sec, args.end_pad_sec) == (0.7, 1.0, 1.5, 2.0, 1.4)
+
+
+def test_players_flag_reaches_run_request(tmp_path, monkeypatch):
+    cli_main = import_cli_main_with_stubs(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    captured = {}
+
+    class _FakeServices:
+        def run_analysis(self, request, deps=None):
+            captured.setdefault("requests", []).append(request)
+            return None
+
+    monkeypatch.setattr(cli_main, "validate_video", lambda *a, **k: None)
+    monkeypatch.setattr(cli_main, "RallyClipServices", _FakeServices)
+
+    default_cfg = cli_main.build_run_config(_asset_args(tmp_path))
+    assert default_cfg.save_player_tracks is False
+    opt_in = cli_main.build_run_config(_asset_args(tmp_path, save_player_tracks=True))
+    assert opt_in.save_player_tracks is True
+    assert cli_main.run_pipeline(default_cfg) == 0
+    assert cli_main.run_pipeline(opt_in) == 0
+    assert [r.save_player_tracks for r in captured["requests"]] == [False, True]

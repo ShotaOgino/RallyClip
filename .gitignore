@@ -121,3 +121,7 @@ wandb/
 # notebooks
 debug.ipynb
 ios/
+
+# Small test fixture (~53 KB compressed v0.6.0 pose-track dump of tests/fixtures/golden_cli/clip.mp4;
+# scripts/eval/dump_heatmap_tracks.py; tests/test_shots.py)
+!tests/fixtures/golden_cli/clip.tracks.npz

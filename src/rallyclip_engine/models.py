@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import dataclasses
+import json
 import logging
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -54,11 +56,60 @@ def _estimate_stream_window_count(num_frames: int, sequence_length: int, overlap
     return count
 
 
+_RAW_POSE_KEYS = ("boxes", "keypoints", "conf", "box_conf")
+
+
+class PlayerRecordSink(list):
+    """Opt-in player tee target: one (near, far, raw_pose_frame) per kept frame.
+    ``raw_scale`` maps the raw (source-pixel) detections to the reference frame."""
+
+    raw_scale = (1.0, 1.0)
+
+
+def _tee_pose_frames(pose_stream, holder: dict):
+    """Remember the pose frame the preprocessor is currently on (it consumes one pose
+    frame per yielded record, no lookahead), so the record tee can attach the raw,
+    pre-court-filter detections to it."""
+    for frame_data in pose_stream:
+        holder["last"] = frame_data
+        yield frame_data
+
+
+def _raw_pose_frame(holder: Optional[dict]):
+    raw = holder.get("last") if holder is not None else None
+    if isinstance(raw, dict):
+        return {k: raw[k] for k in _RAW_POSE_KEYS if k in raw}
+    return None
+
+
+def _tee_player_records(records, sink: list, holder: Optional[dict] = None):
+    """v1 path: pass preprocessed records through unchanged, appending (near, far, raw)
+    for every kept frame (target >= 0) -- exactly the frames FeatureEngineer turns into rows."""
+    for rec in records:
+        if rec[1] >= 0:
+            sink.append((rec[2], rec[3], _raw_pose_frame(holder)))
+        yield rec
+
+
+def _tee_slot_players(slot_stream, sink: list, holder: Optional[dict] = None):
+    """v2 path: pass ``(status, {slot: player})`` through unchanged, appending
+    (near, far, raw) for every kept frame (status >= 0) -- exactly the frames
+    _iter_v2_features turns into rows. Players are in reference pixels (screen size);
+    with net-line slots the far player comes from the crop pass. raw is the
+    full-frame, pre-court-filter detections (the crop detections are not kept)."""
+    for status, players in slot_stream:
+        if status >= 0:
+            players = players or {}
+            sink.append((players.get("near"), players.get("far"), _raw_pose_frame(holder)))
+        yield status, players
+
+
 def build_feature_stream(
     request: RunRequest,
     deps: RuntimeDeps,
     progress_callback: Optional[ProgressCallback],
     cancel_check: Optional[CancelCheck],
+    player_sink: Optional[list] = None,
 ):
     """Shared source-video -> feature-row stream.
 
@@ -67,6 +118,11 @@ def build_feature_stream(
     and boundary-heatmap pipelines consume identical features, differing only in
     the model head + decode, so this lives at module scope rather than in any one
     AnalysisModel.
+
+    ``player_sink`` (opt-in, RunRequest.save_player_tracks): a list that receives one
+    ``(near_player, far_player, raw_pose_frame)`` per kept frame, 1:1 with the feature
+    rows; raw_pose_frame is the pre-court-filter detections in source pixels (the
+    court filter drops the far player), scaled via ``PlayerRecordSink.raw_scale``.
     """
     feature_set = str(request.feature_set)
     feature_cfg = _manifest_feature_pipeline(request)
@@ -144,7 +200,7 @@ def build_feature_stream(
         from extraction.crop_pass import CROP_WINDOW
 
         pose_kwargs["crop_window"] = tuple(feature_cfg.get("crop_window") or CROP_WINDOW)
-    pose_stream = extractor.iter_pose_frames(
+    pose_frames = extractor.iter_pose_frames(
         video_path=str(request.video_path),
         confidence_threshold=float(request.conf),
         start_time_seconds=int(request.start_time),
@@ -155,15 +211,30 @@ def build_feature_stream(
         progress_callback=pose_progress,
         **pose_kwargs,
     )
+    holder: Optional[dict] = None
+    pose_stream = pose_frames
+    if player_sink is not None:
+        holder = {}
+        pose_stream = _tee_pose_frames(pose_frames, holder)
+        if isinstance(player_sink, PlayerRecordSink) and src_width and src_height:
+            player_sink.raw_scale = (
+                float(request.screen_width) / float(src_width),
+                float(request.screen_height) / float(src_height),
+            )
     if feature_set != "v1":
+        slot_stream = pre.iter_slot_players(pose_stream, court_mask, src_width, src_height, geometry)
+        if player_sink is not None:
+            slot_stream = _tee_slot_players(slot_stream, player_sink, holder)
         feature_stream = _iter_v2_features(
-            pre.iter_slot_players(pose_stream, court_mask, src_width, src_height, geometry),
+            slot_stream,
             feature_set, feature_cfg, int(request.screen_width), int(request.screen_height), float(request.fps),
         )
         _emit(progress_callback, "preprocess", 1)
         _emit(progress_callback, "feature", 1)
         return feature_stream
     preprocessed_stream = pre.iter_preprocess_frames(pose_stream, court_mask, src_width, src_height)
+    if player_sink is not None:
+        preprocessed_stream = _tee_player_records(preprocessed_stream, player_sink, holder)
     fe = deps.FeatureEngineer(
         screen_width=int(request.screen_width),
         screen_height=int(request.screen_height),
@@ -445,10 +516,67 @@ class HeatmapHybridModel(AnalysisModel):
         tracks = self.infer(features, progress_callback, cancel_check)
         intervals_sec = self.postprocess(tracks)
         _emit(progress_callback, "inference", 100, "completed")
-        return self._write_interval_result(intervals_sec)
+        result = self._write_interval_result(intervals_sec)
+        if getattr(self.request, "save_player_tracks", False):
+            result = self._write_player_outputs(result, tracks)
+        return result
 
     def preprocess(self, progress_callback: Optional[ProgressCallback], cancel_check: Optional[CancelCheck]):
-        return build_feature_stream(self.request, self.deps, progress_callback, cancel_check)
+        if not getattr(self.request, "save_player_tracks", False):
+            return build_feature_stream(self.request, self.deps, progress_callback, cancel_check)
+        self._player_records = PlayerRecordSink()
+        return build_feature_stream(
+            self.request, self.deps, progress_callback, cancel_check, player_sink=self._player_records
+        )
+
+    def _write_player_outputs(self, result: RunResult, tracks) -> RunResult:
+        """Opt-in Phase 1 outputs next to the segments CSV: ``<name>_players.npz``
+        (dump-compatible: pointness/start/end tracks + near/far players) and
+        ``<name>_points.json`` (analysis.players.points_document). Never fails the run:
+        on error the diagnostics carry ``player_analysis_error`` instead."""
+        request = self.request
+        diagnostics = dict(result.diagnostics)
+        try:
+            from analysis.players import PlayerTracks, RawDetections, analyze_points, points_document
+
+            np = self.deps.np
+            records = getattr(self, "_player_records", None) or []
+            pointness = np.asarray(tracks[0], dtype=np.float64)
+            n = int(pointness.shape[0])
+            if len(records) != n:
+                logging.warning("player records (%d) != track frames (%d); truncating", len(records), n)
+            n = min(n, len(records))
+            raw_frames = [r[2] if len(r) > 2 else None for r in records[:n]]
+            raw = None
+            if any(f is not None for f in raw_frames):
+                raw = RawDetections.from_frames(raw_frames, getattr(records, "raw_scale", (1.0, 1.0)))
+            players = PlayerTracks.from_records(
+                [r[0] for r in records[:n]],
+                [r[1] for r in records[:n]],
+                fps=float(request.fps),
+                start_time=float(request.start_time),
+                ref_size=(int(request.screen_width), int(request.screen_height)),
+                raw=raw,
+            )
+            base_name = request.output_name or request.video_path.stem
+            out_dir = Path(request.csv_output_dir)
+            npz_path = players.save_npz(
+                out_dir / f"{base_name}_players.npz",
+                pointness=pointness[:n],
+                start_prob=np.asarray(tracks[1], dtype=np.float64)[:n],
+                end_prob=np.asarray(tracks[2], dtype=np.float64)[:n],
+                default_segments=np.asarray(result.intervals_sec, dtype=np.float64).reshape(-1, 2),
+                params=str(dict(self.spec.params or {})),
+            )
+            rows = analyze_points(result.intervals_sec, players)
+            points_path = out_dir / f"{base_name}_points.json"
+            points_path.write_text(json.dumps(points_document(rows), indent=1), encoding="utf-8")
+            diagnostics["players_npz"] = str(npz_path)
+            diagnostics["points_json"] = str(points_path)
+        except Exception as exc:  # pragma: no cover - defensive: analysis is an add-on
+            logging.warning("Player analysis failed; segments are unaffected", exc_info=True)
+            diagnostics["player_analysis_error"] = f"{type(exc).__name__}: {exc}"
+        return dataclasses.replace(result, diagnostics=diagnostics)
 
     def infer(
         self,

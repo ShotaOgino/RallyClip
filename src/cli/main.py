@@ -85,6 +85,8 @@ class RunConfig:
     emit_json: bool = False
     # Heatmap decode overrides (CLI -> config); None = manifest postprocess.params only.
     decode_params: Optional[Dict[str, Any]] = None
+    # Phase 1 player analysis (--players / config save_player_tracks): opt-in.
+    save_player_tracks: bool = False
 
 
 def _load_config_dict(path: Optional[str]) -> Dict[str, Any]:
@@ -289,6 +291,7 @@ def build_run_config(args: argparse.Namespace) -> RunConfig:
         duration=int(arg("duration") if arg("duration") is not None else cfg("duration", 999999)),
         emit_json=bool(arg("emit_json") or False),
         decode_params=decode_params,
+        save_player_tracks=_pick_bool(arg("save_player_tracks"), cfg("save_player_tracks"), False),
     )
 
 
@@ -335,6 +338,7 @@ def run_pipeline(cfg: RunConfig) -> int:
         duration=cfg.duration,
         models_dir=Path.cwd() / "models",
         decode_params=cfg.decode_params,
+        save_player_tracks=bool(cfg.save_player_tracks),
     )
     deps = RuntimeDeps(
         np=np,
@@ -366,6 +370,10 @@ def run_pipeline(cfg: RunConfig) -> int:
         # ASCII only: Windows consoles default to cp1252 and a bare CLI
         # (no ultralytics stdout reconfiguration) crashes on emoji.
         print(f"Done. Outputs in {cfg.output_dir}")
+        diagnostics = getattr(result, "diagnostics", None) or {}
+        for key in ("points_json", "players_npz", "player_analysis_error"):
+            if diagnostics.get(key):
+                print(f"{key}: {diagnostics[key]}")
     return 0
 
 
@@ -437,6 +445,11 @@ def main(*, force_cli: bool = False) -> int:
     p.add_argument("--segment-video", dest="segment_video", action="store_true", default=None, help="Write segmented MP4")
     p.add_argument("--no-segment-video", dest="segment_video", action="store_false", help="Skip segmented MP4")
     p.add_argument("--json", dest="emit_json", action="store_true", help="Print the analysis result as JSON on stdout")
+    p.add_argument(
+        "--players", dest="save_player_tracks", action="store_true", default=None,
+        help="Also write <name>_players.npz + <name>_points.json (server / player ids per point) "
+             "next to the segments CSV (heatmap pipeline)",
+    )
     args = p.parse_args()
 
     cfg = build_run_config(args)

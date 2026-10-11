@@ -132,3 +132,34 @@ def test_v2_features_honour_manifest_drops():
     stream = _pre().iter_slot_players([frame], mask, 1920, 1080, GEOM)
     [(vec, _)] = list(_iter_v2_features(stream, "v2_nearfar", {"drop_slots": ["far"]}, 1920, 1080, 5.0))
     assert vec.shape == (145,)
+
+
+# --- opt-in player tee (RunRequest.save_player_tracks) on the v2 path ------------
+def test_v2_player_tee_is_one_record_per_feature_row_and_leaves_features_unchanged():
+    from rallyclip_engine.models import PlayerRecordSink, _tee_pose_frames, _tee_slot_players
+
+    near, far = box_at(0, -9), box_at(1, 11, h=50)
+    frame = detections([near])
+    frame["crop"] = detections([far])
+    other = detections([box_at(0.5, -8)])  # no crop detections: far slot empty
+    frames = [frame, {"annotation_status": -1}, other]
+    mask = np.zeros((1080, 1920), np.uint8)
+
+    plain = list(_iter_v2_features(_pre().iter_slot_players(frames, mask, 1920, 1080, GEOM),
+                                   "v2_nearfar", {}, 1920, 1080, 5.0))
+    sink, holder = PlayerRecordSink(), {}
+    slots = _pre().iter_slot_players(_tee_pose_frames(frames, holder), mask, 1920, 1080, GEOM)
+    teed = list(_iter_v2_features(_tee_slot_players(slots, sink, holder), "v2_nearfar", {}, 1920, 1080, 5.0))
+
+    assert len(teed) == len(plain) == len(sink) == 2  # skipped frame: no row, no record
+    for (a, ta), (b, tb) in zip(teed, plain):
+        np.testing.assert_array_equal(a, b)
+        assert ta == tb
+    (near0, far0, raw0), (near1, far1, raw1) = sink
+    np.testing.assert_allclose(near0["box"], near)
+    np.testing.assert_allclose(far0["box"], far)  # far from the crop pass
+    assert far1 is None
+    # raw = that frame's full-frame detections (source pixels), crop pass not included
+    assert set(raw0) == {"boxes", "keypoints", "conf", "box_conf"}
+    np.testing.assert_allclose(raw0["boxes"], frame["boxes"])
+    np.testing.assert_allclose(raw1["boxes"], other["boxes"])

@@ -1311,6 +1311,23 @@ def _persist_library_item(
         raise
 
 
+PLAYER_OUTPUT_FILES = {"points_json": "points.json", "players_npz": "players.npz"}
+
+
+def _persist_player_outputs(library_id: str, diagnostics: Dict[str, Any]) -> None:
+    """Move the engine's Phase 1 outputs (server / player ids per point) into the
+    library item as points.json + players.npz. Best effort: never fails the job."""
+    item_dir = _library_item_dir(library_id)
+    for key, filename in PLAYER_OUTPUT_FILES.items():
+        src = diagnostics.get(key)
+        if not src or not Path(src).is_file():
+            continue
+        try:
+            shutil.move(str(src), str(item_dir / filename))
+        except OSError:
+            logging.warning("Could not store %s for %s", filename, library_id, exc_info=True)
+
+
 def _new_job_state(job_id: str, cfg: Dict[str, Any]) -> JobDict:
     return {
         "id": job_id,
@@ -1787,7 +1804,9 @@ def _run_pipeline(job_id: str) -> None:
             video_path=upload_path,
             output_dir=DEFAULT_OUTPUT_DIR,
             output_name=base_name,
-            csv_output_dir=DEFAULT_CSV_DIR,
+            # write_csv is off, so the only files landing here are the Phase 1 player
+            # outputs; keep them in the job dir (moved into the library item below).
+            csv_output_dir=job_dir,
             write_csv=False,
             segment_video=False,
             yolo_weights=yolo_weights,
@@ -1812,6 +1831,7 @@ def _run_pipeline(job_id: str) -> None:
             models_dir=models_dir,
             estimated_duration_s=duration_seconds,
             decode_params=coerce_decode_overrides(cfg),
+            save_player_tracks=True,
         )
         deps = RuntimeDeps(
             np=runtime.np,
@@ -1850,6 +1870,7 @@ def _run_pipeline(job_id: str) -> None:
             )
             job["paths"]["video"] = str(source_out)
             job["paths"]["csv"] = str(csv_out)
+            _persist_player_outputs(library_id, result.diagnostics)
         job["library_id"] = library_id
         _set_step(job, "output", "completed", 100)
         job["status"] = "completed"
@@ -2759,6 +2780,18 @@ def library_segments_reset(item_id: str):
             return jsonify({"error": f"Could not reset points: {exc}"}), 503
         _invalidate_library_export(item_id)
     return jsonify(_segments_payload(item_id, intervals)), 200
+
+
+@app.route("/api/library/<item_id>/points", methods=["GET"])
+def library_points(item_id: str):
+    """Per-point server / player ids (analysis.players points document)."""
+    path = _resolve_library_file(item_id, PLAYER_OUTPUT_FILES["points_json"])
+    if path is None:
+        return jsonify({"error": "Player analysis not available"}), 404
+    try:
+        return jsonify(json.loads(path.read_text(encoding="utf-8"))), 200
+    except (OSError, ValueError) as exc:
+        return jsonify({"error": f"Could not read player analysis: {exc}"}), 500
 
 
 @app.route("/api/library/<item_id>/csv", methods=["GET"])

@@ -43,6 +43,7 @@ hiddenimports = [
     "runtime.defaults",
     "runtime.paths",
     "extraction.yolo_onnx_runner",
+    "analysis.players",  # lazily imported by the engine for player outputs (GUI jobs)
     "onnxruntime",
     "psutil",
     "webview",

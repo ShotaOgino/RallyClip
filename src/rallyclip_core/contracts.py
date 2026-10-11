@@ -53,6 +53,11 @@ class RunRequest:
     # pipeline. None (default) = manifest only. Pipelines without a heatmap
     # decode (classic hysteresis) ignore it. Build with coerce_decode_overrides.
     decode_params: Optional[Dict[str, Any]] = None
+    # Opt-in Phase 1 player analysis: tee the kept-frame near/far player records and
+    # write <output_name>_players.npz + <output_name>_points.json (analysis.players)
+    # into csv_output_dir; paths are reported in RunResult.diagnostics. False (default)
+    # leaves every output byte-identical.
+    save_player_tracks: bool = False
 
 
 # Heatmap decode knobs a user may override per run (config.toml [run] / CLI /
