@@ -17,14 +17,21 @@ import numpy as np
 import pytest
 
 from analysis.shots import (
+    CAMERA_RIGHT_SIGN,
     PoseWindow,
     ShotParams,
     SwingEvent,
     analyze_point_shots,
     arm_speeds,
     classify_stroke,
+    collapse_serve_pairs,
     detect_swings,
     estimate_handedness,
+    handedness_evidence,
+    match_handedness,
+    match_handedness_evidence,
+    match_swing_reference,
+    serve_posture,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -86,14 +93,16 @@ def add_swing(side, k, pattern, arm="right", both=False):
 
 def add_serve(side, k, arm="right"):
     """Toss arm up at k-2, hitting wrist behind the head at k-1, contact above the head at
-    k, fast pull-down at k+1."""
+    k, fast pull-down across the body at k+1. As on real footage, the toss goes up in
+    front of the hitting-arm side of the head and contact is above the hitting shoulder
+    (x toward the player's right for a right-hander, mirrored for a left-hander)."""
     kp, box = side["kp"], side["box"]
     top = box[k, 1]
-    f = side["facing"]
+    f = side["facing"] * (1.0 if arm == "right" else -1.0)
     hit, toss = (10, 9) if arm == "right" else (9, 10)
     cx = (box[k, 0] + box[k, 2]) / 2
     sw = side["sw"]
-    kp[k - 2, toss] = (cx - 0.5 * sw * f, top - 25 * sw / 40)
+    kp[k - 2, toss] = (cx + 0.3 * sw * f, top - 25 * sw / 40)
     kp[k - 1, hit] = (cx + 0.6 * sw * f, top - 5 * sw / 40)
     kp[k, hit] = (cx + 0.4 * sw * f, top - 30 * sw / 40)
     kp[k + 1, hit] = (cx - 0.75 * sw * f, top + (0.22 * 130 + 50) * sw / 40)
@@ -204,14 +213,72 @@ def test_single_frame_left_right_swap_is_repaired():
     assert detect(side, t) == []
 
 
-def test_handedness_from_fastest_wrist():
+def _serving_side(arm="right", facing=1, starts=(8, 38, 68), n=100, **kw):
+    side = make_side(n, facing=facing, **kw)
+    for k in starts:
+        add_serve(side, k, arm=arm)
+    return side
+
+
+def test_handedness_from_serve_geometry_near_and_far():
+    n = 100
+    t = ts(n)
+    for arm in ("right", "left"):
+        near = _serving_side(arm)
+        got, conf = estimate_handedness(near["kp"], near["kpconf"], near["present"], t, near["box"], side="near")
+        assert got == arm and conf >= 0.5
+        far = _serving_side(arm, facing=-1, cx=640, foot_y=250, h=60, sw=18)
+        assert estimate_handedness(far["kp"], far["kpconf"], far["present"], t, far["box"], side="far")[0] == arm
+    assert CAMERA_RIGHT_SIGN == {"near": 1.0, "far": -1.0}
+
+
+def test_handedness_ignores_wrist_labels_and_speed():
+    """Regression for beta-tennis 2R: two right-handers came out "left" because the
+    left-labelled wrist was the faster one. The serve geometry does not read labels."""
+    n = 100
+    t = ts(n)
+    side = _serving_side("right")
+    side["kp"][:, [9, 10]] = side["kp"][:, [10, 9]]       # YOLO labels the racket wrist "left"
+    for k in (20, 50, 80):
+        add_swing(side, k, FOREHAND, arm="left")          # and the left label moves fastest
+    ev = handedness_evidence(side["kp"], side["kpconf"], side["present"], t, side["box"], side="near")
+    assert ev["arm"] == "right" and ev["source"] == "serve"
+    assert ev["votes_right"] == 3 and ev["votes_left"] == 0
+    sp = arm_speeds(side["kp"], side["kpconf"], side["present"], t, side["box"])
+    assert np.nanpercentile(sp["left"], 95) > np.nanpercentile(sp["right"], 95)
+
+
+def test_handedness_falls_back_to_right_without_serve_evidence():
     n = 80
     t = ts(n)
     side = make_side(n)
     for k in (10, 25, 40, 55, 70):
-        add_swing(side, k, FOREHAND, arm="left")
-    arm, ratio = estimate_handedness(side["kp"], side["kpconf"], side["present"], t, side["box"])
-    assert arm == "left" and ratio > 1.5
+        add_swing(side, k, FOREHAND, arm="left")  # fast left wrist, but never overhead
+    ev = handedness_evidence(side["kp"], side["kpconf"], side["present"], t, side["box"])
+    assert (ev["arm"], ev["confidence"], ev["source"], ev["episodes"]) == ("right", 0.0, "fallback", 0)
+    # one left vote only: |1 - 0| / (1 + 2) = 0.33 >= 0.3 -> left; with a higher bar -> fallback right
+    one = _serving_side("left", starts=(20,), n=40)
+    t1 = ts(40)
+    assert estimate_handedness(one["kp"], one["kpconf"], one["present"], t1, one["box"]) == ("left", pytest.approx(0.333, abs=1e-3))
+    strict = ShotParams(handedness_min_confidence=0.5)
+    assert estimate_handedness(one["kp"], one["kpconf"], one["present"], t1, one["box"], strict)[0] == "right"
+
+
+def test_match_handedness_windows_and_override():
+    n = 100
+    t = ts(n)
+    near = _serving_side("left")
+    tracks = tracks_from(near, absent(n), t)
+    assert match_handedness(tracks) == {"near": "left", "far": "right"}
+    # serve windows that miss every serve -> no evidence -> fallback
+    ev = match_handedness_evidence(tracks, points=[(18.0, 19.0)])
+    assert ev["near"]["source"] == "fallback" and ev["near"]["arm"] == "right"
+    pts = [(t[k - 3], t[k + 10]) for k in (8, 38, 68)]
+    assert match_handedness_evidence(tracks, points=pts)["near"]["votes_left"] == 3
+    over = match_handedness_evidence(tracks, override={"near": "right"})
+    assert over["near"] == {"arm": "right", "confidence": 1.0, "source": "override"}
+    with pytest.raises(ValueError):
+        match_handedness(tracks, override={"near": "both"})
 
 
 # ------------------------------------------------------------- classification
@@ -284,9 +351,11 @@ def test_classify_volley_inside_court_short_swing():
     t = ts(n)
     feet = np.concatenate([np.full(15, 480.0), np.linspace(480, 380, 6), np.full(n - 21, 380.0)])
     side = add_swing(make_side(n, foot_path=feet), 25, PUNCH)
-    e, st = _classify(side, t, baseline_foot_y=480.0)
+    e, st = _classify(side, t, baseline_foot_y=480.0, params=ShotParams(volley_enabled=True))
     assert e.width_sec <= ShotParams().volley_short_sec + 1e-9
     assert st["stroke"] == "volley"
+    # off by default (no ball evidence): the same punch is a groundstroke
+    assert _classify(side, t, baseline_foot_y=480.0)[1]["stroke"] == "forehand"
     # same punch from the baseline is a groundstroke
     _, st2 = _classify(add_swing(make_side(n), 25, PUNCH), t)
     assert st2["stroke"] == "forehand"
@@ -299,6 +368,34 @@ def test_far_player_is_never_volley():
     far = add_swing(make_side(n, h=60, sw=18, facing=-1, foot_path=feet), 25, PUNCH)
     _, st = _classify(far, t, name="far", baseline_foot_y=300.0)
     assert st["stroke"] != "volley"
+
+
+def test_image_side_rule_survives_wrist_label_swaps_labels_rule_does_not():
+    """lr_source="image" reads the hands' side from image x, so YOLO labelling the racket
+    wrist "left" (as it does on the rear camera) does not flip forehand / backhand."""
+    n = 30
+    t = ts(n)
+    side = add_swing(make_side(n), 12, FOREHAND)
+    side["kp"][:, [9, 10]] = side["kp"][:, [10, 9]]
+    side["kp"][:, [7, 8]] = side["kp"][:, [8, 7]]
+    ev = detect(side, t)
+    assert len(ev) == 1
+    assert classify_stroke(ev[0], window(side, t), handedness="right")["stroke"] == "forehand"
+    labels = classify_stroke(ev[0], window(side, t), handedness="right", params=ShotParams(lr_source="labels"))
+    assert labels["stroke"] == "backhand"
+    with pytest.raises(ValueError):
+        classify_stroke(ev[0], window(side, t), params=ShotParams(lr_source="camera"))
+
+
+def test_image_side_rule_reads_preparation_not_follow_through():
+    """The follow-through crosses the body; the rule reads [t - fbh_prep_sec, t]."""
+    n = 30
+    t = ts(n)
+    late = {-2: (60, -10), -1: (60, -10), 0: (55, -20), 1: (-90, -40), 2: (-90, -10), 3: (-90, -10)}
+    side = add_swing(make_side(n), 12, late)
+    ev = detect(side, t)
+    assert len(ev) == 1
+    assert classify_stroke(ev[0], window(side, t), handedness="right")["stroke"] == "forehand"
 
 
 def test_prior_event_and_missing_pose_are_unknown():
@@ -355,6 +452,84 @@ def test_opponent_overlap_is_deduped_and_same_side_double_suppressed():
     out2 = analyze_point_shots((0.0, 7.0), tracks_from(near2, absent(n), t), handedness={"near": "right", "far": "right"})
     assert out2["suppressed"] == 1
     assert [s["source"] for s in out2["shots"]].count("motion") == 1
+
+
+def _toss_then_contact(n=40, k_toss=4, gap=5):
+    """Near serve detected twice: a fast toss (hand overhead, faster than the contact)
+    at k_toss, then a slower racket swing ``gap`` samples later."""
+    near = make_side(n)
+    box, kp, sw = near["box"], near["kp"], near["sw"]
+    top = box[k_toss, 1]
+    cx = (box[k_toss, 0] + box[k_toss, 2]) / 2
+    kp[k_toss, 9] = (cx + 0.3 * sw, top - 25 * sw / 40)          # toss arm at the top
+    kp[k_toss + 1, 9] = (cx + 0.3 * sw, top - 25 * sw / 40)
+    kp[k_toss - 1, 9] += (60 * sw / 40, 120 * sw / 40)              # fast rise into k_toss
+    add_swing(near, k_toss + gap, PUNCH)
+    return near
+
+
+def test_serve_toss_and_contact_collapse_onto_the_contact():
+    n = 40
+    t = ts(n)
+    near = _toss_then_contact()
+    evs = detect(near, t)
+    assert len(evs) == 2 and evs[0].peak_speed > evs[1].peak_speed   # the toss is the faster peak
+    w = window(near, t)
+    assert serve_posture(evs[0], w, post_sec=ShotParams().toss_post_sec) > ShotParams().overhead_margin
+    kept, contacts, tosses = collapse_serve_pairs(evs, {"near": w}, point_start=0.4)
+    assert kept == [evs[1]] and tosses == [evs[0]] and id(evs[1]) in contacts
+    out = analyze_point_shots((0.4, 7.0), tracks_from(near, absent(n), t), handedness={"near": "right", "far": "right"})
+    motion = [s for s in out["shots"] if s["source"] == "motion"]
+    assert out["serve_pairs"] == 1 and out["serve_tosses"] == [{"t": round(evs[0].t, 3), "player_side": "near"}]
+    assert [(s["t"], s["stroke"]) for s in motion] == [(round(evs[1].t, 3), "serve")]
+    # the known server is the other side -> no pair, the generic same-side rule keeps the faster
+    out_far = analyze_point_shots((0.4, 7.0), tracks_from(near, absent(n), t), server="far",
+                                  handedness={"near": "right", "far": "right"})
+    assert out_far["serve_pairs"] == 0
+    assert [s["t"] for s in out_far["shots"] if s["source"] == "motion"] == [round(evs[0].t, 3)]
+
+
+def test_serve_pair_needs_toss_posture_and_a_short_gap():
+    n = 40
+    t = ts(n)
+    near = _toss_then_contact(gap=9)  # 1.8 s > serve_pair_sec
+    evs = detect(near, t)
+    assert len(evs) == 2
+    assert collapse_serve_pairs(evs, {"near": window(near, t)}, point_start=0.4)[1] == {}
+    plain = add_swing(add_swing(make_side(n), 4, FOREHAND), 9, PUNCH)  # no hand overhead
+    evs2 = detect(plain, t)
+    assert len(evs2) == 2
+    assert collapse_serve_pairs(evs2, {"near": window(plain, t)}, point_start=0.4)[1] == {}
+
+
+def test_swing_gate_drops_peaks_far_below_the_players_own_strokes():
+    n = 40
+    t = ts(n)
+    scaled = lambda g: {k: (dx * g, dy * g) for k, (dx, dy) in FOREHAND.items()}  # noqa: E731
+    side = add_swing(add_swing(make_side(n), 10, scaled(2.0)), 25, scaled(0.85))  # a stroke, then a slow arm motion
+    evs = detect(side, t)
+    assert len(evs) == 2
+    strong, weak = sorted(evs, key=lambda e: -e.peak_speed)
+    ref = strong.peak_speed
+    assert weak.peak_speed < ShotParams().swing_gate_rel * ref
+    gated = detect(side, t, speed_ref=ref)
+    assert [e.t for e in gated] == [strong.t]
+    assert len(detect(side, t, speed_ref=ref, params=ShotParams(swing_gate_rel=0.0))) == 2
+    assert len(detect(side, t, speed_ref=None)) == 2
+
+
+def test_match_swing_reference_needs_enough_swings():
+    n = 200
+    t = ts(n)
+    near = make_side(n)
+    ks = list(range(8, 190, 12))  # 16 forehands, one per point
+    for k in ks:
+        add_swing(near, k, FOREHAND)
+    tracks = tracks_from(near, absent(n), t)
+    pts = [(t[k] - 1.0, t[k] + 1.0) for k in ks]
+    ref = match_swing_reference(tracks, pts, handedness={"near": "right", "far": "right"})
+    assert ref["far"] is None and ref["near"] > ShotParams().abs_floor
+    assert match_swing_reference(tracks, pts[:5], handedness={"near": "right", "far": "right"})["near"] is None
 
 
 def test_known_server_prior_serve_goes_to_server():

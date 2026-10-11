@@ -7,8 +7,12 @@ scales or box heights, so none depends on it; NaN where absent, COCO-17 keypoint
 order). numpy only: no torch / cv2 / av, so this can later be called from the engine
 without touching the torch-free runtime invariant.
 
-Pipeline per point and player side
-----------------------------------
+Pipeline per match, then per point and player side
+---------------------------------------------------
+0. Once per match: ``match_handedness`` (hitting arm per camera side from the serve
+   geometry, label-free, with a confidence and an override) and
+   ``match_swing_reference`` (each side's median in-point swing peak, the reference of
+   the swing-likelihood gate).
 1. ``detect_swings``: wrist speed relative to the body (mid-shoulder), normalised by a
    rolling body scale (shoulder width, floored at half the torso length so a side-on
    torso does not inflate speeds), with a per-step left/right label-swap repair; the
@@ -16,12 +20,28 @@ Pipeline per point and player side
    lightly smoothed, then peak-picked with a threshold
    ``max(abs_floor, median + rel_k * 1.4826 * MAD)`` over the player's own speeds in the
    window, a bounded prominence test, non-maximum suppression with a refractory period,
-   and a parabolic sub-sample peak time.
-2. ``classify_stroke``: serve / overhead / forehand / backhand / volley / unknown from
-   the pose at the samples flanking the contact time (rules below).
+   a parabolic sub-sample peak time, and the swing-likelihood gate (peak >=
+   ``swing_gate_rel`` x the match reference).
+2. ``classify_stroke``: serve / overhead / forehand / backhand / (volley, off by
+   default) / unknown from the pose around the contact time (rules below).
 3. ``analyze_point_shots``: both sides, merged in time with the rally alternation prior
-   (de-duplicate near-simultaneous opposite-side events, suppress same-side doubles,
-   fill a missing opponent shot or serve as ``source="prior"``).
+   (serve toss + contact pairs collapsed onto the contact, de-duplicate near-simultaneous
+   opposite-side events, suppress same-side doubles, fill a missing opponent shot or
+   serve as ``source="prior"``).
+
+Left / right: camera geometry vs keypoint labels
+------------------------------------------------
+COCO "left_wrist" / "right_wrist" are meant to be the person's own sides. On the
+beta-tennis rear camera YOLO mostly labels the near player (seen from behind) by image
+side instead: the racket wrist is "right" while it is on the camera-right of the body and
+becomes "left" when it crosses over (serve and forehand follow-through, two-handed
+backhand), and YOLO often puts both wrist labels on one arm. On 2R the shoulders, hips
+and ears are all ordered against the back-view convention in ~20 % of near frames (part
+real rotation, e.g. the serve's shoulder turn, part whole-skeleton label flips). So by default (``ShotParams.lr_source = "image"``) no rule trusts the
+labels for a side decision: sides come from image x and ``CAMERA_RIGHT_SIGN`` (near
+player: camera-right = their right; far player, facing the camera: mirrored), and the
+hand that matters is chosen by position (highest, or both hands' centroid), not by label.
+``lr_source = "labels"`` keeps the earlier label-based rules for comparison.
 
 Known limits (by design of a label-free baseline)
 -------------------------------------------------
@@ -31,18 +51,16 @@ Known limits (by design of a label-free baseline)
 * The far player is small (shoulder width ~10-20 px) and often missing; its keypoint
   noise is a large fraction of its body scale, so far events are both missed and
   hallucinated more often. The alternation prior compensates for missing ones and
-  reports how many it added.
-* Left/right keypoint labels come from YOLO; rules use the labels self-consistently
-  (forehand = hitting wrist on its own shoulder's side), so a consistent L/R swap is
-  harmless but a per-frame swap is not.
-* Handedness is "the wrist that moves fastest over the match" per camera side; a side
-  holds two different players across change-overs and two-handed backhands move both
-  wrists, so the estimate is weak (ratio ~1.06 on beta-tennis 2R). Pass per-player
-  handedness once Phase 1 identity exists; forehand/backhand depends on it.
-* All thresholds are hand-set first guesses, sanity-checked on unlabelled beta-tennis
-  matches (inter-shot interval / rally length plausibility), not fitted. A learned
-  classifier replaces ``classify_stroke`` once ``scripts/eval/export_shot_clips.py``
-  labels exist.
+  reports how many it added. Far handedness usually has no serve evidence and falls
+  back to "right" with confidence 0.
+* Handedness is per camera side; a side holds two different players across
+  change-overs. Pass per-player handedness (``override``) once Phase 1 identity exists.
+* Volleys need the ball (bounce or not), so the volley rule is off by default.
+* A second serve after a fault inside one detected point is not recognised as a serve.
+* Thresholds started as hand-set guesses; the 2026-10-12 changes (handedness, image-side
+  forehand/backhand, serve pairs, volley off, swing gate) were checked against model
+  pseudo-labels of one match (``labels/``), each with the physical rationale in its
+  docstring. Not validated on a second match or a human-verified label set yet.
 """
 from __future__ import annotations
 
@@ -60,6 +78,12 @@ WRIST = {"left": 9, "right": 10}
 HIP = {"left": 11, "right": 12}
 OTHER_ARM = {"left": "right", "right": "left"}
 SIDES = ("near", "far")
+# Camera geometry (beta-tennis / broadcast-style rear camera): the near player is seen
+# from behind, so the player's own right is at larger image x (+1); the far player faces
+# the camera, so the player's own right is at smaller image x (-1). Every image-side rule
+# multiplies image x offsets by this sign to get "toward the player's own right".
+CAMERA_RIGHT_SIGN = {"near": 1.0, "far": -1.0}
+LR_SOURCES = ("image", "labels")
 STROKES = ("serve", "forehand", "backhand", "volley", "overhead", "unknown")
 
 
@@ -76,6 +100,14 @@ class ShotParams:
     box_scale_ratio: float = 0.23     # body-scale fallback = ratio * box height
     elbow_gain: float = 1.6           # wrist-missing fallback: elbow speed * gain
     dominant_only: bool = False       # signal = hitting-arm wrist only (else max of both wrists)
+    # Where the stroke rules get "left" / "right" from (see ``classify_stroke``):
+    # "image"  - image x + CAMERA_RIGHT_SIGN; the COCO left/right keypoint labels are not
+    #            trusted for side decisions (default; YOLO labels the near player's wrists
+    #            by image side, so a racket arm that crosses the body changes label).
+    # "labels" - trust the keypoint labels as the person's own sides (the pre-2026-10-12
+    #            rules; kept for comparison and for footage where the labels are reliable).
+    lr_source: str = "image"
+    handedness_min_confidence: float = 0.3  # below this the estimate falls back to "right"
     max_jump_box_h: float = 1.0       # box centre moved > this * box height in one step -> identity jump
     max_box_h_ratio: float = 1.6      # box height changed by more than this factor -> identity jump
     max_gap_factor: float = 1.5       # samples further apart than this * nominal dt are not consecutive
@@ -85,12 +117,20 @@ class ShotParams:
     refractory_sec: float = 0.6       # no two swings by one player closer than this
     prominence_window_sec: float = 1.2  # look this far each side for the valley around a peak
     prominence_frac: float = 0.3      # peak must rise >= frac * peak above the higher valley
+    swing_gate_rel: float = 0.65      # drop peaks < this * the side's median in-point swing peak
+                                      # (needs a match-level reference; 0 = off)
+    swing_ref_min_events: int = 10    # fewer swings in the match -> no reference, no gate
     # classify_stroke
     contact_max_dt: float = 0.25      # use samples within this of the peak time
     overhead_margin: float = 0.8      # wrist above head by > margin * body scale
     serve_window_sec: float = 2.5     # a serve is the first swing within this of point start
     serve_pre_sec: float = 0.5        # serve posture may be seen this long before the peak
+    toss_post_sec: float = 0.5        # the tossing hand tops out up to this long after its speed peak
+    serve_pair_sec: float = 1.5       # toss -> contact of one serve (2R: 0.8-1.25 s); the server's
+                                      # next real shot is >= ~2 s later (2R: >= 2.3 s)
     side_margin: float = 0.15         # |wrist - midline| below margin * body scale -> unknown
+    fbh_prep_sec: float = 0.4         # image FH/BH rule: hands' side over [t - this, t]
+    volley_enabled: bool = False      # volley rule off until there is ball evidence (see classify_stroke)
     volley_depth_box_h: float = 0.5   # near player's feet this many box heights in front of their baseline
     volley_short_sec: float = 0.4     # swing above half-peak no longer than this
     # analyze_point_shots
@@ -297,23 +337,123 @@ def arm_speeds(kp, kpconf, present, timestamps, box=None, params: ShotParams = D
     return out
 
 
-def estimate_handedness(kp, kpconf, present, timestamps, box=None, params: ShotParams = DEFAULT_PARAMS) -> Tuple[str, float]:
-    """Hitting arm = the wrist with the higher 95th-percentile speed over the given frames.
+def _head_xy(kp, kpconf, present, scale, p: ShotParams) -> np.ndarray:
+    """(n, 2) head point: nose, else the mean of eyes/ears, else mid-shoulder (y lifted by
+    0.6 body scale, as in ``_head_y``). NaN where none is measurable."""
+    c = p.kp_conf_min
+    nose = _kp_xy(kp, kpconf, present, NOSE, c)
+    face = np.stack([_kp_xy(kp, kpconf, present, j, c) for j in (L_EYE, R_EYE, L_EAR, R_EAR)])
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        face = np.nanmean(face, axis=0)
+    sh = _mid(_kp_xy(kp, kpconf, present, SHOULDER["left"], c), _kp_xy(kp, kpconf, present, SHOULDER["right"], c))
+    sh = sh - np.stack([np.zeros(len(sh)), 0.6 * np.asarray(scale, dtype=np.float64)], axis=1)
+    out = np.where(np.isfinite(nose).all(axis=1)[:, None], nose, face)
+    return np.where(np.isfinite(out).all(axis=1)[:, None], out, sh)
 
-    Returns (arm, ratio) where ratio = faster / slower percentile (1.0 = undecided,
-    defaults to "right"). Feed it a whole match, not one point.
+
+def handedness_evidence(
+    kp,
+    kpconf,
+    present,
+    timestamps,
+    box=None,
+    params: ShotParams = DEFAULT_PARAMS,
+    *,
+    side: str = "near",
+    windows: Optional[Sequence[Tuple[float, float]]] = None,
+) -> Dict[str, Any]:
+    """Hitting arm from the serve geometry, label-free. See ``estimate_handedness``.
+
+    Returns {"arm", "confidence", "votes_right", "votes_left", "abstained", "episodes",
+    "source"} with source "serve" (votes decided it) or "fallback" ("right", too little or
+    too inconsistent evidence).
     """
-    s = arm_speeds(kp, kpconf, present, timestamps, box, params)
-    vals = {}
-    for arm in ("left", "right"):
-        a = s[arm][np.isfinite(s[arm])]
-        vals[arm] = float(np.percentile(a, 95)) if len(a) >= 10 else np.nan
-    vl, vr = vals["left"], vals["right"]
-    if not (np.isfinite(vl) and np.isfinite(vr)) or min(vl, vr) <= 0:
-        return "right", 1.0
-    if vl > vr:
-        return "left", vl / vr
-    return "right", vr / vl
+    p = params
+    ts = np.asarray(timestamps, dtype=np.float64)
+    kp = np.asarray(kp, dtype=np.float64)
+    kpconf = None if kpconf is None else np.asarray(kpconf, dtype=np.float64)
+    present = np.asarray(present, dtype=bool)
+    box = None if box is None else np.asarray(box, dtype=np.float64)
+    out = {"arm": "right", "confidence": 0.0, "votes_right": 0, "votes_left": 0, "abstained": 0, "episodes": 0,
+           "source": "fallback"}
+    if len(ts) == 0:
+        return out
+    scale = _body_scale(kp, kpconf, present, box, ts, p)
+    head = _head_xy(kp, kpconf, present, scale, p)
+    wr = np.stack([_kp_xy(kp, kpconf, present, WRIST[a], p.kp_conf_min) for a in ("left", "right")])  # (2, n, 2)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        up = (head[None, :, 1] - wr[:, :, 1]) / scale[None, :]          # wrist height above the head, bs
+    up_f = np.where(np.isfinite(up), up, -np.inf)
+    top = np.argmax(up_f, axis=0)                                      # highest wrist, whatever its label
+    up_max = up_f[top, np.arange(len(ts))]
+    with np.errstate(invalid="ignore", divide="ignore"):
+        lateral = (wr[top, np.arange(len(ts)), 0] - head[:, 0]) / scale * CAMERA_RIGHT_SIGN.get(side, 1.0)
+    over = (up_max > p.overhead_margin) & np.isfinite(lateral)
+    if windows is not None:
+        episodes = [np.where(over & (ts >= lo) & (ts <= hi))[0] for lo, hi in windows]
+    else:
+        idx = np.where(over)[0]
+        cuts = np.where(np.diff(ts[idx]) > p.serve_window_sec)[0] + 1 if len(idx) else []
+        episodes = np.split(idx, cuts) if len(idx) else []
+    votes = {"right": 0, "left": 0}
+    for ep in episodes:
+        if len(ep) == 0:
+            continue
+        out["episodes"] += 1
+        v = float(np.median(lateral[ep]))
+        if abs(v) < p.side_margin:
+            out["abstained"] += 1
+        else:
+            votes["right" if v > 0 else "left"] += 1
+    r, lft = votes["right"], votes["left"]
+    conf = abs(r - lft) / (r + lft + 2.0)  # Laplace-shrunk agreement: 32 vs 0 -> 0.94, 2 vs 0 -> 0.5
+    out.update(votes_right=r, votes_left=lft, confidence=round(conf, 3))
+    if r + lft > 0 and conf >= p.handedness_min_confidence:
+        out.update(arm="right" if r >= lft else "left", source="serve")
+    return out
+
+
+def estimate_handedness(
+    kp,
+    kpconf,
+    present,
+    timestamps,
+    box=None,
+    params: ShotParams = DEFAULT_PARAMS,
+    *,
+    side: str = "near",
+    windows: Optional[Sequence[Tuple[float, float]]] = None,
+) -> Tuple[str, float]:
+    """Hitting arm from where the hands go overhead, mostly on serves. Returns (arm, confidence).
+
+    Physics: a server tosses the ball up in front of and to the hitting-arm side of the
+    head, and strikes it above the hitting shoulder; overheads are struck the same way.
+    So whenever a hand is clearly above the head (``overhead_margin`` body scales: the
+    toss arm at the top of the toss, then the racket arm at contact), that highest hand
+    is on the hitting-arm side of the head. The highest hand is picked by image height,
+    not by its keypoint label, and its side is the sign of its image x offset from the
+    head, turned into the player's own side with ``CAMERA_RIGHT_SIGN`` (near player seen
+    from behind: camera-right = their right; far player facing the camera: mirrored).
+
+    Each episode votes with the median offset over its overhead frames; an offset under
+    ``side_margin`` body scales abstains. Episodes are the given ``windows`` (pass the
+    serve windows ``[start - pre_pad_sec, start + serve_window_sec]`` of the points when
+    they are known), else runs of overhead frames split at gaps > ``serve_window_sec``.
+    ``confidence = |right - left| / (votes + 2)``; below ``handedness_min_confidence``, or
+    with no vote at all, the answer is the population prior "right" (about 9 in 10
+    players) with that low confidence. Pass an override instead of trusting it whenever
+    the hand is known (``match_handedness(override=...)``).
+
+    Why not wrist speed (the pre-2026-10-12 estimator): on the beta-tennis rear camera
+    YOLO labels the near player's wrists mostly by image side, so the racket wrist is
+    labelled "left" whenever it crosses the body (serve and forehand follow-through), and
+    the free arm moves fast too (toss, two-handed backhand). On 2R the 95th-percentile
+    speeds came out left 8.55 / right 8.15 bs/s and the estimate said "left" for two
+    right-handers. The serve geometry voted right in 32 of 32 near-served points.
+    """
+    ev = handedness_evidence(kp, kpconf, present, timestamps, box, params, side=side, windows=windows)
+    return ev["arm"], float(ev["confidence"])
 
 
 def _smooth121(x: np.ndarray) -> np.ndarray:
@@ -388,6 +528,7 @@ def detect_swings(
     *,
     box=None,
     handedness: Optional[str] = None,
+    speed_ref: Optional[float] = None,
     params: ShotParams = DEFAULT_PARAMS,
 ) -> List[SwingEvent]:
     """Swing peaks of one player in one window (normally one point).
@@ -410,6 +551,16 @@ def detect_swings(
 
     ``handedness`` should come from ``estimate_handedness`` over the whole match; if
     None it is estimated from this window (unreliable for short windows).
+
+    Swing-likelihood gate: with ``speed_ref`` (the side's median in-point swing peak over
+    the match, ``match_swing_reference``), peaks below ``swing_gate_rel * speed_ref`` are
+    dropped. Physics: a stroke is the fastest arm motion a player makes, and one player's
+    strokes are similar in speed through a match, so a peak far below their own typical
+    stroke is something else (walking with the racket, bouncing the ball, towel, catching
+    a ball). The per-window threshold alone cannot see this: in a quiet window it adapts
+    down to whatever moves. Relative, not absolute, so it holds for slower or faster
+    players and any body-scale error. 0.65 is the largest value that keeps >= 95 % of the
+    labelled in-point swings on the 2R pseudo-labels (no hold-out: one match).
     """
     if side not in SIDES:
         raise ValueError(f"side must be one of {SIDES}, got {side!r}")
@@ -422,7 +573,7 @@ def detect_swings(
     box = None if box is None else np.asarray(box, dtype=np.float64)
     present = np.asarray(present, dtype=bool)
     if handedness is None:
-        handedness, _ = estimate_handedness(kp, kpconf, present, ts, box, p)
+        handedness, _ = estimate_handedness(kp, kpconf, present, ts, box, p, side=side)
     sp = arm_speeds(kp, kpconf, present, ts, box, p)
     dom, off = sp[handedness], sp[OTHER_ARM[handedness]]
     if p.dominant_only:
@@ -476,6 +627,8 @@ def detect_swings(
         frame = int(np.argmin(np.abs(ts - t)))
         accepted.append(SwingEvent(t=t, player_side=side, peak_speed=float(peak), arm=arm,
                                    confidence=conf, source="motion", frame=frame, width_sec=width))
+    if speed_ref is not None and np.isfinite(speed_ref) and speed_ref > 0 and p.swing_gate_rel > 0:
+        accepted = [e for e in accepted if e.peak_speed >= p.swing_gate_rel * speed_ref]
     accepted.sort(key=lambda e: e.t)
     return accepted
 
@@ -516,6 +669,120 @@ def _orientation(kp, kpconf, present, arm: str, side: str, p: ShotParams) -> flo
     return prior if arm == "right" else -prior
 
 
+def serve_posture(event: SwingEvent, window: PoseWindow, params: ShotParams = DEFAULT_PARAMS,
+                  post_sec: Optional[float] = None) -> float:
+    """Highest hand above the head (body scales; either wrist, whatever its label) over the
+    samples in ``[t - serve_pre_sec, t + post_sec]`` (default ``contact_max_dt``); -inf
+    when not measurable. A value above ``overhead_margin`` is the serve / overhead
+    posture (toss arm up, or racket arm up at contact)."""
+    p = params
+    post = p.contact_max_dt if post_sec is None else post_sec
+    ts = np.asarray(window.timestamps, dtype=np.float64)
+    pres = np.asarray(window.present, dtype=bool)
+    sel = np.where(pres & (ts >= event.t - p.serve_pre_sec - 1e-9) & (ts <= event.t + post + 1e-9))[0]
+    if len(sel) == 0:
+        return float("-inf")
+    kp = np.asarray(window.kp, dtype=np.float64)
+    kc = None if window.kpconf is None else np.asarray(window.kpconf, dtype=np.float64)
+    box = None if window.box is None else np.asarray(window.box, dtype=np.float64)
+    scale = _body_scale(kp, kc, pres, box, ts, p)
+    head = _head_xy(kp, kc, pres, scale, p)
+    best = float("-inf")
+    for a in ("left", "right"):
+        wy = _kp_xy(kp, kc, pres, WRIST[a], p.kp_conf_min)[sel, 1]
+        with np.errstate(invalid="ignore", divide="ignore"):
+            up = (head[sel, 1] - wy) / scale[sel]
+        if np.isfinite(up).any():
+            best = max(best, float(np.nanmax(up)))
+    return best
+
+
+def collapse_serve_pairs(events: Sequence[SwingEvent], windows: Mapping[str, PoseWindow], point_start: float,
+                         params: ShotParams = DEFAULT_PARAMS, server: Optional[str] = None
+                         ) -> Tuple[List[SwingEvent], Dict[int, float], List[SwingEvent]]:
+    """Drop the toss when one serve was detected twice (toss, then contact).
+
+    Physics: the toss arm rises fast and goes overhead about 1 s before the racket strikes
+    the ball, so a serve often reads as two same-side swing peaks. The ball has to be in
+    the air before it can be struck, so of such a pair the *later* peak is the contact,
+    whatever their speeds (the generic same-side suppression keeps the faster one, and on
+    beta-tennis 2R that was the toss in 6 of 15 pairs). Toss to contact took 0.8-1.25 s on
+    2R; the server's next real shot cannot come within ``serve_pair_sec`` of the serve
+    (the ball has to reach the receiver and come back: >= 2.3 s on 2R), so the later peak
+    needs no posture of its own (at 5 fps the racket is overhead for about one sample and
+    is often missed).
+
+    Rule, per side that may serve (``server`` None or equal): its first motion event is
+    within ``serve_window_sec`` of ``point_start`` and shows the serve posture
+    (``serve_posture`` > ``overhead_margin``, looking up to ``toss_post_sec`` after the
+    peak: the toss arm's speed peaks while it rises, the hand tops out 0.1-0.4 s later),
+    and its next event is within
+    ``serve_pair_sec`` -> the first is dropped (it is the toss of that serve). Returns
+    (events, {id(kept contact event): toss posture height}, [dropped toss events]).
+    """
+    p = params
+    drop, contacts = set(), {}
+    for side in SIDES:
+        if server is not None and server != side:
+            continue
+        own = [e for e in events if e.player_side == side and e.source == "motion"]
+        if len(own) < 2 or side not in windows:
+            continue
+        e1, e2 = own[0], own[1]
+        if e1.t - point_start > p.serve_window_sec or e2.t - e1.t > p.serve_pair_sec:
+            continue
+        up = serve_posture(e1, windows[side], p, post_sec=p.toss_post_sec)
+        if up > p.overhead_margin:
+            drop.add(id(e1))
+            contacts[id(e2)] = up
+    return [e for e in events if id(e) not in drop], contacts, [e for e in events if id(e) in drop]
+
+
+def _forehand_backhand_image(event: SwingEvent, kp, kpconf, present, ts, scale, side: str, hand: str,
+                             p: ShotParams) -> Dict[str, Any]:
+    """Forehand / backhand from where the hands are while the stroke is prepared and hit.
+
+    Physics: a groundstroke is prepared and struck on one side of the body (the racket
+    side for a forehand, the other side for a backhand, one- or two-handed) and only the
+    follow-through, after the speed peak, crosses the body. So the side is read from the
+    samples in ``[t - fbh_prep_sec, t]`` (back-swing to contact; ``t`` is the speed peak,
+    ~contact at 5 fps): the mean lateral offset of the hands (the centroid of whichever
+    wrists are measurable, so a label that jumps between the two wrists does not matter)
+    from the body midline (mean of shoulder-centre and hip-centre x), in body scales,
+    turned into the player's own side with ``CAMERA_RIGHT_SIGN`` and mirrored for a
+    left-hander. Positive -> forehand, negative -> backhand, |mean| < ``side_margin`` ->
+    unknown. Falls back to the first sample after the peak when no sample precedes it.
+
+    Measured on the 2R pseudo-labels (78 labelled FH/BH events, hand = right): this rule
+    0.846; the same centroid at the pre-peak sample only 0.795; labels-based rule with the
+    right hand 0.69 of the FH/BH-predicted ones. Using the post-peak sample (follow-through)
+    gives 0.36, i.e. the crossing is real.
+    """
+    c = p.kp_conf_min
+    sel = np.where(present & (ts >= event.t - p.fbh_prep_sec - 1e-9) & (ts <= event.t + 1e-9))[0]
+    if len(sel) == 0:
+        sel = np.where(present & (ts > event.t) & (ts <= event.t + p.contact_max_dt))[0][:1]
+    vals = []
+    for i in sel:
+        sl = slice(int(i), int(i) + 1)
+        kc = None if kpconf is None else kpconf[sl]
+        wx = [_kp_xy(kp[sl], kc, present[sl], WRIST[a], c)[0][0] for a in ("left", "right")]
+        wx = [v for v in wx if np.isfinite(v)]
+        shc = _mid(_kp_xy(kp[sl], kc, present[sl], SHOULDER["left"], c), _kp_xy(kp[sl], kc, present[sl], SHOULDER["right"], c))[0][0]
+        hpc = _mid(_kp_xy(kp[sl], kc, present[sl], HIP["left"], c), _kp_xy(kp[sl], kc, present[sl], HIP["right"], c))[0][0]
+        mids = [v for v in (shc, hpc) if np.isfinite(v)]
+        s = scale[i]
+        if wx and mids and np.isfinite(s) and s > 0:
+            vals.append((float(np.mean(wx)) - float(np.mean(mids))) / s)
+    if not vals:
+        return {"stroke": "unknown", "confidence": 0.0}
+    score = float(np.mean(vals)) * CAMERA_RIGHT_SIGN.get(side, 1.0) * (1.0 if hand == "right" else -1.0)
+    if abs(score) < p.side_margin:
+        return {"stroke": "unknown", "confidence": 0.0}
+    conf = float(np.clip(abs(score) / (4.0 * p.side_margin), 0.2, 0.9))
+    return {"stroke": "forehand" if score > 0 else "backhand", "confidence": conf}
+
+
 def classify_stroke(
     event: SwingEvent,
     window: PoseWindow,
@@ -540,18 +807,28 @@ def classify_stroke(
        window is called a serve even without the posture (confidence 0.5).
        Limitation: a let / fault + second serve inside one detected point produces two
        serve-like swings; only the first is "serve", the second becomes "overhead".
-    2. **overhead**: the hitting wrist is above the head by the same margin at a contact
-       sample (the samples just before / after t, within ``contact_max_dt``). Limitation: a high
-       topspin follow-through that ends above the head 0.1-0.2 s after contact can
-       read as overhead.
-    3. **volley** (near player only): the feet (box bottom) are more than
+    2. **overhead**: a hand is above the head by the same margin at a contact sample.
+       ``lr_source="image"``: either hand (whatever its label), at the sample at/before
+       the speed peak only (else the first after it): the hand over the head after the
+       peak is a groundstroke follow-through (a topspin forehand finishes high over the
+       other shoulder). On 2R, also reading the post-peak sample made 11 in-point
+       overhead calls (9 forehands/backhands, 2 serves), pre-peak only 2 (both serves).
+       ``lr_source="labels"``: the hitting wrist label, at the samples just before /
+       after t (within ``contact_max_dt``). Limitation: few real overheads to check
+       (one labelled on 2R, missed).
+    3. **volley** (near player only, and only with ``volley_enabled``; off by default):
+       the feet (box bottom) are more than
        ``volley_depth_box_h`` box heights above (in front of) the player's baseline
        position in the point (``baseline_foot_y``: 90th percentile of box bottom) and
        the swing is short (raw speed >= half-peak for <= ``volley_short_sec``).
        Far player: never volley (perspective compresses depth; too few pixels).
        Limitation: no ball, so a groundstroke taken inside the baseline after a short
        ball with a compact swing reads as a volley; a long swing at the net reads as
-       forehand/backhand.
+       forehand/backhand. Why off: a volley is defined by the ball not bouncing, which
+       pose cannot see; on the 2R pseudo-labels the rule fired 23 times inside points
+       (19 after the handedness / serve fixes, 13 of them on stroke-labelled events: 8
+       forehands, 3 backhands, 2 serves) with precision 0 (no labelled volley at all:
+       juniors rallying from the baseline), so it only cost accuracy. Re-enable once ball tracking (Phase 3) can confirm a no-bounce contact.
     4. **forehand / backhand**: hitting wrist x relative to the body midline (mean of
        shoulder-centre and hip-centre x) at the last sample at/before the peak (else the
        first one after it: the follow-through crosses the body), signed by the
@@ -600,7 +877,16 @@ def classify_stroke(
                 best = max(best, (hy - wy) / s)
         return best
 
-    hit_up = max(above_head(i, (arm,)) for i in contact)
+    image_lr = p.lr_source == "image"
+    if p.lr_source not in LR_SOURCES:
+        raise ValueError(f"lr_source must be one of {LR_SOURCES}, got {p.lr_source!r}")
+    # image mode: the highest hand whatever its label (the racket wrist's label is not reliable)
+    hit_arms = ("left", "right") if image_lr else (arm,)
+    # image mode: only the sample at/before the speed peak (contact or just before). The
+    # hand over the head *after* the peak is a groundstroke follow-through (a topspin
+    # forehand finishes high over the other shoulder), not an overhead.
+    oh_samples = [i for i in contact if ts[i] <= event.t + 1e-9] or contact[:1] if image_lr else contact
+    hit_up = max(above_head(i, hit_arms) for i in oh_samples)
     serve_side_ok = server is None or server == side
     in_serve_window = point_start is not None and (event.t - point_start) <= p.serve_window_sec
     if is_first_of_side and in_serve_window and serve_side_ok:
@@ -614,7 +900,7 @@ def classify_stroke(
         return {"stroke": "overhead", "confidence": float(np.clip(0.5 + 0.5 * (hit_up - p.overhead_margin), 0.0, 1.0))}
 
     i0 = contact[0]
-    if side == "near" and box is not None and np.isfinite(box[i0]).all():
+    if p.volley_enabled and side == "near" and box is not None and np.isfinite(box[i0]).all():
         bh_all = box[:, 3] - box[:, 1]
         bh = _nanmedian(np.where(present, bh_all, np.nan))
         base = baseline_foot_y
@@ -627,6 +913,8 @@ def classify_stroke(
                 return {"stroke": "volley", "confidence": float(np.clip(0.4 + 0.6 * (depth - p.volley_depth_box_h), 0.0, 0.9))}
 
     c = p.kp_conf_min
+    if image_lr:
+        return _forehand_backhand_image(event, kp, kpconf, present, ts, scale, side, handedness or "right", p)
     for i in contact:
         sl = slice(i, i + 1)
         kc = None if kpconf is None else kpconf[sl]
@@ -663,13 +951,80 @@ def _side_arrays(tracks: Mapping[str, Any], side: str):
             np.asarray(tracks[f"{side}_box"], dtype=np.float64) if f"{side}_box" in tracks else None)
 
 
-def match_handedness(tracks: Mapping[str, Any], params: ShotParams = DEFAULT_PARAMS) -> Dict[str, str]:
-    """{"near": arm, "far": arm} from the whole dump (call once per match)."""
+def serve_windows(points, params: ShotParams = DEFAULT_PARAMS) -> List[Tuple[float, float]]:
+    """``[start - pre_pad_sec, start + serve_window_sec]`` per point (the serve's frames)."""
+    return [(b[0] - params.pre_pad_sec, b[0] + params.serve_window_sec) for b in map(_point_bounds, points)]
+
+
+def match_handedness_evidence(
+    tracks: Mapping[str, Any],
+    params: ShotParams = DEFAULT_PARAMS,
+    *,
+    points=None,
+    override: Optional[Mapping[str, str]] = None,
+) -> Dict[str, Dict[str, Any]]:
+    """Per side: ``handedness_evidence`` over the whole dump (call once per match).
+
+    ``points`` (list of (start, end) or {"start", "end"}) restricts the evidence to the
+    serve windows; without them every overhead episode in the dump votes. ``override``
+    ({"near": "left"}, ...) wins for the sides it names (source "override", confidence 1).
+    """
     ts = np.asarray(tracks["timestamps"], dtype=np.float64)
+    win = serve_windows(points, params) if points is not None else None
     out = {}
     for side in SIDES:
+        if override and override.get(side):
+            arm = str(override[side]).lower()
+            if arm not in OTHER_ARM:
+                raise ValueError(f"handedness override for {side} must be 'left' or 'right', got {arm!r}")
+            out[side] = {"arm": arm, "confidence": 1.0, "source": "override"}
+            continue
         kp, kc, pres, box = _side_arrays(tracks, side)
-        out[side] = estimate_handedness(kp, kc, pres, ts, box, params)[0]
+        out[side] = handedness_evidence(kp, kc, pres, ts, box, params, side=side, windows=win)
+    return out
+
+
+def match_handedness(
+    tracks: Mapping[str, Any],
+    params: ShotParams = DEFAULT_PARAMS,
+    *,
+    points=None,
+    override: Optional[Mapping[str, str]] = None,
+) -> Dict[str, str]:
+    """{"near": arm, "far": arm}; see ``match_handedness_evidence``. One "near" side holds
+    both players across change-overs, so this is per camera side; feed per-player
+    handedness from Phase 1 identity through ``override`` / ``handedness`` once it exists."""
+    ev = match_handedness_evidence(tracks, params, points=points, override=override)
+    return {side: ev[side]["arm"] for side in SIDES}
+
+
+def match_swing_reference(
+    tracks: Mapping[str, Any],
+    points,
+    params: ShotParams = DEFAULT_PARAMS,
+    *,
+    handedness: Optional[Mapping[str, str]] = None,
+) -> Dict[str, Optional[float]]:
+    """{side: median peak speed (bs/s) of the ungated swings inside the points}, the
+    reference of the swing-likelihood gate (see ``detect_swings``); None for a side with
+    fewer than ``swing_ref_min_events`` swings. Call once per match with its points."""
+    p = params
+    ts = np.asarray(tracks["timestamps"], dtype=np.float64)
+    hand = handedness or match_handedness(tracks, p, points=points)
+    out: Dict[str, Optional[float]] = {}
+    for side in SIDES:
+        kp, kc, pres, box = _side_arrays(tracks, side)
+        peaks = []
+        for pt in points:
+            s0, e0 = _point_bounds(pt)
+            sel = np.where((ts >= s0 - p.pre_pad_sec) & (ts <= e0))[0]
+            if len(sel) == 0:
+                continue
+            sl = slice(int(sel[0]), int(sel[-1]) + 1)
+            evs = detect_swings(kp[sl], None if kc is None else kc[sl], pres[sl], ts[sl], side=side,
+                                box=None if box is None else box[sl], handedness=hand.get(side), params=p)
+            peaks += [e.peak_speed for e in evs if s0 - 0.2 <= e.t <= e0]
+        out[side] = float(np.median(peaks)) if len(peaks) >= p.swing_ref_min_events else None
     return out
 
 
@@ -679,6 +1034,7 @@ def analyze_point_shots(
     server: Optional[str] = None,
     *,
     handedness: Optional[Mapping[str, str]] = None,
+    speed_ref: Optional[Mapping[str, Optional[float]]] = None,
     params: ShotParams = DEFAULT_PARAMS,
 ) -> Dict[str, Any]:
     """Shots of one point: both players' swings merged with the alternation prior.
@@ -686,7 +1042,9 @@ def analyze_point_shots(
     ``point`` is (start, end) seconds or {"start", "end"}; ``tracks`` is the dump
     mapping (npz or dict). ``server`` ("near"/"far") comes from Phase 1 when available.
     ``handedness`` defaults to ``match_handedness(tracks)`` (pass it in when looping
-    over many points).
+    over many points). ``speed_ref`` ({side: float or None}, from
+    ``match_swing_reference``) turns on the swing-likelihood gate of ``detect_swings``;
+    without it there is no gate (one point is too few swings for a reference).
 
     Merge rules (each counted in the result):
     * opposite-side events closer than ``opp_dedupe_sec``: keep the more confident
@@ -724,7 +1082,7 @@ def analyze_point_shots(
             if np.isfinite(feet).any():
                 baseline[side] = float(np.nanpercentile(feet, 90))
         evs = detect_swings(w.kp, w.kpconf, w.present, w.timestamps, side=side, box=w.box,
-                            handedness=handedness.get(side), params=p)
+                            handedness=handedness.get(side), speed_ref=(speed_ref or {}).get(side), params=p)
         events.extend(e for e in evs if start - 0.2 <= e.t <= end)
     events.sort(key=lambda e: e.t)
     n_motion = len(events)
@@ -741,8 +1099,10 @@ def analyze_point_shots(
             out.append(e)
         return out, dropped
 
-    # opponent overlap: keep the more confident; same-side double (e.g. serve toss +
-    # contact, swing + recovery): keep the faster swing (the hit is the fastest motion).
+    # serve toss + contact of one serve: keep the contact (collapse_serve_pairs); opponent
+    # overlap: keep the more confident; other same-side doubles (swing + recovery): keep
+    # the faster swing (the hit is the fastest motion).
+    events, serve_contacts, tosses = collapse_serve_pairs(events, windows, start, p, server=server)
     events, deduped = collapse(events, False, p.opp_dedupe_sec, lambda e: e.confidence)
     events, suppressed = collapse(events, True, p.same_side_min_gap_sec, lambda e: e.peak_speed)
 
@@ -750,9 +1110,13 @@ def analyze_point_shots(
     seen = set()
     for e in events:
         w = windows[e.player_side]
-        st = classify_stroke(e, w, point_start=start, is_first_of_side=e.player_side not in seen,
-                             handedness=handedness.get(e.player_side), server=server,
-                             baseline_foot_y=baseline.get(e.player_side), params=p)
+        if id(e) in serve_contacts:  # contact of a collapsed toss/contact pair
+            st = {"stroke": "serve",
+                  "confidence": float(np.clip(0.6 + 0.4 * (serve_contacts[id(e)] - p.overhead_margin), 0.0, 1.0))}
+        else:
+            st = classify_stroke(e, w, point_start=start, is_first_of_side=e.player_side not in seen,
+                                 handedness=handedness.get(e.player_side), server=server,
+                                 baseline_foot_y=baseline.get(e.player_side), params=p)
         seen.add(e.player_side)
         labelled.append((e, st))
 
@@ -785,5 +1149,6 @@ def analyze_point_shots(
                       "source": e.source, "arm": e.arm, "peak_speed": round(e.peak_speed, 2),
                       "width_sec": round(e.width_sec, 2)})
     return {"start": start, "end": end, "shots": shots, "rally_length": len(shots), "prior_filled": prior,
-            "motion_events": n_motion, "deduped": deduped, "suppressed": suppressed,
+            "motion_events": n_motion, "serve_pairs": len(serve_contacts),
+            "serve_tosses": [{"t": round(e.t, 3), "player_side": e.player_side} for e in tosses], "deduped": deduped, "suppressed": suppressed,
             "handedness": dict(handedness)}
