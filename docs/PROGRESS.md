@@ -68,6 +68,17 @@ and its README / pyproject edits (none were part of the work).
 - Phase 1/2/4 real-match numbers (server 0.97-1.0, identity 0.97-1.0 on 1R/2R/3R/SF/P1R) are
   from v0.5.0 dumps; not re-run on v0.6.0 dumps yet.
 
+## Serve side (2026-10-11, added after the port)
+
+`src/analysis/serve_side.py` + rows `serve_side*` in `analyze_points` / `_points.json`
+(`serve_side_check`), geometry via `PlayerRecordSink.geometry` and npz `geometry_json`
+(engine sidecar + `dump_heatmap_tracks.py`), eval table in `analyze_players.py --geometry`.
+2R (v0.6.0 dump, geometry recomputed from the video): visual vs scoreboard parity 50/55 =
+0.909 (near serves 28/32, far serves via the near receiver 22/23); confidence median 0.975.
+See DECISIONS 2026-10-11 "Serve side". Gate 580 passed + 2 wall-clock benchmark failures
+under load avg ~80; golden parity 1 passed. The existing 2R dump has no `geometry_json`
+(it predates the key): pass `--geometry` or re-dump.
+
 ## Next steps
 
 1. User: review the branch / decide on a PR to upstream (`feat/runtime-v060` or `main`).
@@ -79,4 +90,6 @@ and its README / pyproject edits (none were part of the work).
    observation, far strokes) and retire `score_shots.py::_far_from_raw`.
 4. Phase 2 labels: `export_shot_clips.py` on one match, label ~300 swings.
 5. Phase 1: tiebreak side changes (every 6 points, no gap).
+5b. Serve side on the other four matches (re-dump with `geometry_json`); use it to
+    flag tdproj clip-parity errors and as a serve-side input to identity / side changes.
 6. Widen the eval set beyond one player / venue.

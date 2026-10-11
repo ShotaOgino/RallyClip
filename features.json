@@ -97,6 +97,13 @@
       "evidence": "2026-10-11 (uv .venv py3.12.7 (--extra cpu --extra dev --extra train), shota Mac M3): 49 passed + golden parity 1 passed. --players on the golden clip (v0.6.0 v2 path): segments CSV equal to the run without --players; golden_players.npz equal to scripts/eval/dump_heatmap_tracks.py output on all 21 shared keys (near 95/120, far 36/120 frames, ref 1920x1080); points.json written. Real-match accuracy (server 0.97-1.0, identity 0.97-1.0 on 5 matches) is from the v0.5.0 snapshot; not yet re-run on v0.6.0 dumps."
     },
     {
+      "id": "phase1-serve-side",
+      "name": "Phase 1: serve side (deuce/ad) per point from the server's (else receiver's) court position via the court homography, cross-checked with the score parity of the point index in its game; rows serve_side* in analyze_points / _points.json; geometry_json in the players npz and eval dumps",
+      "status": "passing",
+      "verification": "PYTHONPATH=src:tests $PY -m pytest -q -p no:cacheprovider tests/test_serve_side.py tests/test_players.py tests/test_cli_golden_parity.py; PYTHONPATH=src:scripts/eval $PY scripts/eval/analyze_players.py --tracks logs/eval/beta-tennis-v060/2026_08_24_2R_Tsukamoto_Takeda.tracks.npz --gt <2R .tdproj> --geometry <compute_court_geometry JSON, out_size 1920x1080>",
+      "evidence": "2026-10-11 (uv .venv py3.12.7, shota Mac M3): tests/test_serve_side.py 22 passed + tests/test_players.py 30 passed; golden parity 1 passed; default gate 580 passed, 9 skipped, 38 deselected + 2 wall-clock preview benchmarks failing under load avg ~80. CLI --players on the golden clip: segments CSV byte-equal to the run without --players, golden_points.json rows carry serve_side (deuce 0.94, source player: no server detected in the clip), golden_players.npz carries geometry_json. dump_heatmap_tracks.py on the golden clip writes geometry_json. 2R (v0.6.0 dump, geometry recomputed from the video, tdproj points, scoreboard game ids): visual on 55/55 points; visual vs score agreement 50/55 = 0.909 (near serves / server position 28/32 = 0.875; far serves / near receiver 22/23 = 0.957); visual confidence median 0.975, 51/55 >= 0.9; clip parity without the second-serve merge 43/55. Disagreements = clip-parity errors (frames checked) + the trailing duplicate clip. Decoded points (jp-junior) with label-free segmentation: 45/54 = 0.833."
+    },
+    {
       "id": "phase2-shot-events",
       "name": "Phase 2 first cut: swing detection from 5 fps pose + rule-based stroke type; alternation prior; labelling clip exporter",
       "status": "passing",

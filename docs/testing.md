@@ -16,7 +16,13 @@ equivalent alternative; `.venv-train` is what was verified 2026-07-03.)
 PYTHONPATH=src:tests $PY -m pytest -q -m "not slow and not e2e" -p no:cacheprovider
 ```
 
-Last known (2026-10-11, `feat/port-v050-analysis` = v0.6.0 runtime + ported decode
+Last known (2026-10-11, `feat/port-v050-analysis` + serve side (`tests/test_serve_side.py` 22 + 2 in
+`tests/test_players.py`)): **580 passed, 9 skipped, 38 deselected** + 2 wall-clock failures
+(`test_gui_smoke.py::test_web_preview_generation_latency_benchmark` and
+`::test_preview_window_generation_latency_benchmark`, load average ~80 from other jobs; re-run alone the
+web one passed, the preview-window one still failed at 55 s for a 16 s window). Golden parity 1 passed.
+
+Previous (2026-10-11, `feat/port-v050-analysis` = v0.6.0 runtime + ported decode
 overrides / presets / upload cap / `src/analysis/` (+117 tests); shota Mac M3, worktree uv
 `.venv` py3.12.7 from `uv sync --extra cpu --extra dev --extra train`, `PY=.venv/bin/python`):
 **558 passed, 9 skipped, 38 deselected, ~46s**. The `[train]` extra (torch) is required:

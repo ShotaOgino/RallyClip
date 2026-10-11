@@ -733,3 +733,49 @@ _(v0.5.0 artifact values; on this branch superseded by the v0.6.0 values in the 
   v0.6.0 the threshold change no longer helps); re-deriving the far player only from raw
   full-frame detections on v0.6.0 (discards the crop pass); reusing the engine sink inside
   the dump script (loses the independent cross-check); committing `logs/eval/` outputs.
+
+## 2026-10-11 — Serve side (deuce / ad) from position + score parity, cross-checked (Phase 1)
+
+- **What:** `src/analysis/serve_side.py` (numpy only). Visual: the server's feet (ankle
+  midpoint, else box bottom-centre) through the court homography, median over -1.0/+0.5 s
+  around the server's first overhead raise (`detect_server` evidence; points without a
+  raise use start + the match's median raise offset); without the server's track, the
+  receiver's feet (`source: "receiver"`). Score: parity of the point's index within its game
+  (even = deuce, also per tiebreak point) from winners / scoreboard game ids, else the
+  label-free server-id segmentation (`infer_first_server_and_check`). `combine`: visual
+  when its confidence >= 0.5, else score; disagreement flagged (`serve_side_agree: false`).
+  Rows gain `serve_side`, `_confidence`, `_source`, `_score`, `_agree`, `_visual*`;
+  `_points.json` gains `serve_side_check`. Geometry rides on `PlayerRecordSink.geometry`
+  (set in `build_feature_stream` for v2 net-line runs; the default path is untouched) and
+  in the npz as `geometry_json` (engine sidecar + `dump_heatmap_tracks.py`).
+- **Side rule:** near player at camera-right (court x > 0) or far player at camera-left
+  (x < 0) = deuce, for the server AND the receiver: each stands in their own deuce court
+  (their right when facing the net), and the two deuce courts are diagonal. The task brief
+  said "a near receiver on camera-left means the far server is on the deuce side"; that is
+  the opposite and the data reject it: on 2R the near receiver of far serves stands at
+  x = +3.3..+3.6 m on even (deuce) points and -3.4..-3.7 m on odd ones (22/23 agree with the
+  scoreboard parity under the rule above, 1/23 under the brief's). The role still matters
+  for the confidence scale (server ~0.4-1.4 m from the centre mark -> 0.25 m scale;
+  receiver ~3.5 m -> 1.0 m).
+- **Second-serve merge (`same_point_gap_s` 5.0):** beta-tennis tdproj sometimes clips a
+  first-serve fault and the second serve separately. On 2R, consecutive clips served from
+  the same side are 1.4-3.8 s apart (8 cases) while alternating ones are >= 6.7 s apart, so a
+  clip starting < 5 s after the previous one keeps the point index. Clip parity 43/55 ->
+  50/55 agreement.
+- **Numbers (2R, v0.6.0 dump, tdproj points, scoreboard game ids):** visual side on 55/55
+  points; agreement 50/55 = 0.909 — near serves (server position) 28/32 = 0.875, far serves
+  (receiver position, far track absent) 22/23 = 0.957. Visual confidence median 0.975, 51/55
+  >= 0.9, min ~0.72. The 5 disagreements: 4 near-serve points in two pairs (#19/#20, #27/#28;
+  the 8.3 s / 11.1 s same-side gaps before them are too long for the merge) where frames at
+  the serve show the server on the side the visual says (checked by eye), i.e. the clip
+  parity is off by one (a repeated or missing clip); and #54, the trailing duplicate clip.
+  On decoded points (jp-junior params) with the label-free segmentation the agreement is
+  45/54 = 0.833 (game boundaries misplaced in one game; the visual answer wins there).
+- **Why:** position is a direct observation and needs no point bookkeeping; score parity is
+  independent and catches visual failures (players not seen, odd positions), so the
+  cross-check is the label-free accuracy signal per match.
+- **Rejected:** box centre x (the side-on server's tossing arm and racket shift it; ankles
+  first); anchoring the score parity to confident visual points (makes the two sources
+  dependent, so the cross-check stops meaning anything); a hard serve window at the point
+  start (decoded and tdproj starts sit ~1.2-1.9 s before the raise); requiring the far track
+  (present in ~2 % of in-point frames on beta-tennis).

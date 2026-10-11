@@ -62,7 +62,13 @@ Status (2026-10-11, first cut, near-player-first; see docs/PROGRESS.md "Phase 1"
       (one in-tiebreak change missed). Engine opt-in `RunRequest.save_player_tracks`,
       CLI `--players`, GUI jobs always on + `GET /api/library/<id>/points`.
 - [x] Label-free check `serve_consistency`; eval `scripts/eval/analyze_players.py`.
-- [ ] No court homography (not needed for these numbers; positions are reference pixels).
+- [x] Serve side (deuce / ad) per point, 2026-10-11: `src/analysis/serve_side.py`; visual (server feet in
+      court metres via the v0.6.0 court homography, receiver when the server is unseen) cross-checked with the
+      score parity of the point index in its game. 2R: visual on 55/55 points, agreement with the scoreboard
+      parity 0.909 (near serves 0.875, far serves via the receiver 0.957); the disagreements are clip-parity
+      errors (repeated / missing clips) or the trailing duplicate clip, not position errors.
+- [ ] Court homography for the other Phase 1 outputs (positions are still reference pixels; the serve side
+      is the first user of court metres).
 - [ ] Far player: not detected by the shipped pose pass (far present < 0.2 % of frames,
       raw detections included), so far-side evidence and far court positions do not
       exist yet; `pick_far_player` is a best-effort helper for when a far-court crop /
