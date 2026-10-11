@@ -1,7 +1,23 @@
 # PROGRESS — overwrite me at every session end
 
-_Last updated: 2026-10-11 (session: port of the v0.5.0 snapshot work onto the v0.6.0
-runtime branch)._
+_Last updated: 2026-10-12 (session: Phase 2 stroke pseudo-labels on beta-tennis 2R, branch
+`feat/shot-labels-2r` off `feat/port-v050-analysis`, worktree `~/Documents/RallyClip-v060-labels`).
+The port state below is unchanged._
+
+## This session: stroke labels (see DECISIONS 2026-10-12)
+
+- New: `scripts/eval/export_shot_frames.py` (3-crop PNG strip per near swing, PyAV, one
+  seek per point; `--hand` counterfactual), `scripts/eval/score_stroke_labels.py`,
+  `tests/test_stroke_labels.py` (+ `test_shots.py`: 32 passed), `labels/` (README,
+  2R `events.csv` + `shot_labels.csv`). Full default gate NOT run (machine loaded by other
+  jobs); targeted tests + compileall only.
+- **Labels are model pseudo-labels (`claude-opus-pseudo`), human verification pending.**
+  186 events: serve 54, forehand 52, no_swing 38, backhand 26, unknown 15, overhead 1.
+- Rule classifier on 2R: in-point accuracy 0.361 (merged shots 0.402); serve P 1.0 / R 0.66;
+  FH/BH swapped 43/56 because `estimate_handedness` says `left` while both players are
+  right-handed; with `--hand right`: in-point 0.566, merged 0.637. Volley rule: 23
+  in-point predictions, 0 real. False events 7 % in points, 65 % between points.
+- PNGs (not in git) were in the session scratchpad; regenerate with the exporter (README).
 
 ## Repo state
 
@@ -77,6 +93,10 @@ and its README / pyproject edits (none were part of the work).
 3. Far player: take the `feat/far-crop-upscale` result (upscaled, geometry-driven crop);
    if far presence inside points >= 70%, re-run Phase 1/2 with far evidence (server by
    observation, far strokes) and retire `score_shots.py::_far_from_raw`.
-4. Phase 2 labels: `export_shot_clips.py` on one match, label ~300 swings.
+4. Phase 2: human pass over `labels/2026_08_24_2R_*.shot_labels.csv` (low / unknown
+   first); then fix handedness (`estimate_handedness` says `left` on 2R: free arm or a pose L/R swap, not diagnosed; per player
+   via Phase 1 identity, or from the serve arm), tighten the volley rule, and keep the
+   contact (not the toss) when the same-side merge collapses a serve pair. Label a second
+   match.
 5. Phase 1: tiebreak side changes (every 6 points, no gap).
 6. Widen the eval set beyond one player / venue.

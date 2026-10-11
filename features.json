@@ -109,6 +109,13 @@
       "status": "passing",
       "verification": "PYTHONPATH=src:tests $PY -m pytest -q -p no:cacheprovider tests/test_score.py; PYTHONPATH=src $PY scripts/eval/reconstruct_score.py --servers-json <name>_points.json",
       "evidence": "2026-10-11 (uv .venv py3.12.7 (--extra cpu --extra dev --extra train), shota Mac M3): 32 passed. reconstruct_score.py --servers-json on the golden clip's points.json runs (1 point, server unknown); on a synthetic 12-point A/B/A list: agreement 1.000, 3 games."
+    },
+    {
+      "id": "phase2-stroke-labels",
+      "name": "Phase 2 stroke labels: 3-frame PNG exporter, label scorer, first (pseudo-)labels on beta-tennis 2R",
+      "status": "passing",
+      "verification": "PYTHONPATH=src:tests $PY -m pytest -q -p no:cacheprovider tests/test_stroke_labels.py; PYTHONPATH=src $PY scripts/eval/score_stroke_labels.py --labels labels/2026_08_24_2R_Tsukamoto_Takeda.shot_labels.csv --events labels/2026_08_24_2R_Tsukamoto_Takeda.events.csv",
+      "evidence": "2026-10-12 (sibling RallyClip-v060-port .venv py3.12, PYTHONPATH=src of this worktree, shota Mac M3): tests/test_stroke_labels.py + tests/test_shots.py 32 passed; compileall src tests scripts/eval exit 0; ruff 0.14.10 clean on new files. export_shot_frames.py on 2R (v0.6.0 dump, tdproj points, --include-between): 186 near swings (143 in points, 118 merged), 0 crop fallbacks, ~30 s decode, deterministic re-run. 186 events labelled by claude-opus-pseudo (MODEL PSEUDO-LABELS, human verification pending): serve 54, forehand 52, no_swing 38, backhand 26, unknown 15, overhead 1, volley 0; 16 dup_of. Rule classifier vs labels: in-point accuracy 44/122=0.361 (excl. low-conf 0.386; merged shots 41/102=0.402); serve P=1.0 R=0.66; FH/BH swapped 43/56 (detector assumed left, both players observed right-handed 133/133); volley predicted 23x in points, 0 true. --hand right counterfactual (same swings): in-point 69/122=0.566, merged 0.637, FH/BH 36/52 correct. False events (no_swing): 7% in points, 65% between points, 20% overall."
     }
   ],
   "active": "phase1-player-identity"
