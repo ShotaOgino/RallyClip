@@ -31,7 +31,8 @@ is unchanged._
   `score_stroke_labels.py` (detection section, `none`), `score_shots.py` (`--hand-near/far`,
   evidence print), `export_shot_clips.py` (new API). Tests: `test_shots.py` 33,
   `test_stroke_labels.py`, `test_players.py`: 72 passed; compileall exit 0.
-- Full default gate: see the session report (run only if the machine load allowed).
+- Full default gate NOT run: load average ~80 from other jobs at session end (targeted
+  tests + compileall + ruff on touched files only). Run it before any PR.
 
 ## Repo state
 
