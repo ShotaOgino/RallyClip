@@ -1,7 +1,7 @@
 """Label-free sanity report for shot events + rule-based stroke types (roadmap Phase 2).
 
 PYTHONPATH=src $PY scripts/eval/score_shots.py --tracks X.tracks.npz [--gt match.tdproj --gt-fps 59.94]
-    [--cfg '{"threshold": 0.65, ...}'] [--server near|far] --json-out out.json
+    [--cfg '{"threshold": 0.65, ...}'] [--server near|far|phase1] --json-out out.json
 
 Points come from --gt (beta-tennis .tdproj, validation != deleted; or a
 segment_id,first_value,last_value CSV in frames at --gt-fps), else from decoding the
@@ -12,6 +12,11 @@ keys (scripts/eval/dump_heatmap_tracks.py after 2026-10-11).
 There are no shot labels yet, so the report is a plausibility check: shots per point,
 rally-length histogram, stroke mix per side, fraction of prior-filled events, and the
 inter-shot interval (real junior rallies: ~1.0-2.0 s between consecutive shots).
+
+--server phase1 passes each point's Phase 1 server (analysis.players.detect_server on
+the same dump; None where it finds none) to analyze_point_shots instead of letting the
+shot pass infer it; with the far player observed (upscaled far crop) the shot pass's own
+serve inference picks the near side on many far-serve points.
 """
 from __future__ import annotations
 
@@ -224,10 +229,17 @@ def run(tracks_path, gt=None, gt_fps=59.94, cfg=None, server=None, far_source="a
     for side in SIDES:
         arm, ratio = estimate_handedness(d[f"{side}_kp"], d.get(f"{side}_kpconf"), d[f"{side}_present"], ts, d.get(f"{side}_box"))
         hand[side], hand_ratio[side] = arm, round(float(ratio), 3)
+    servers = [server] * len(points)
+    if server == "phase1":
+        from analysis.players import PlayerTracks, detect_server
+
+        tracks = PlayerTracks.from_arrays(d)
+        cache = {}
+        servers = [detect_server(pt, tracks, _foot_cache=cache)["server"] for pt in points]
     out = []
     far_points = 0
-    for pt in points:
-        r = analyze_point_shots(pt, d, server=server, handedness=hand)
+    for pt, srv in zip(points, servers):
+        r = analyze_point_shots(pt, d, server=srv, handedness=hand)
         m = (ts >= pt[0]) & (ts <= pt[1])
         r["far_present_frac"] = round(float(np.mean(d["far_present"][m])), 3) if m.any() else 0.0
         far_points += r["far_present_frac"] >= 0.5
@@ -281,7 +293,8 @@ def main(argv=None):
     ap.add_argument("--gt", default=None, help=".tdproj or frames CSV (only with a single --tracks)")
     ap.add_argument("--gt-fps", type=float, default=59.94)
     ap.add_argument("--cfg", default=None, help="JSON dict of HeatmapDecodeConfig overrides (points by decode)")
-    ap.add_argument("--server", default=None, choices=list(SIDES), help="server side for every point (testing only)")
+    ap.add_argument("--server", default=None, choices=[*SIDES, "phase1"],
+                    help="server side for every point (testing only), or phase1 = per point from detect_server")
     ap.add_argument("--far-source", default="auto", choices=["auto", "assigned", "raw"],
                     help="far track: the dump's assigned far player, or rebuilt from raw_* detections "
                          "(auto: raw when the assigned far player is present < 20%% of frames)")

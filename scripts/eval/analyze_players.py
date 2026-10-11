@@ -303,6 +303,10 @@ def main():
           f"far present {tracks.far.present.mean():.3f}")
     print(f"server: near {cons['server_counts']['near']}, far {cons['server_counts']['far']}, "
           f"none {sum(1 for r in rows if r['server'] is None)} (none_frac {cons['none_frac']})")
+    methods = {}
+    for r in rows:
+        methods[r["server_method"]] = methods.get(r["server_method"], 0) + 1
+    print(f"server method: {dict(sorted(methods.items()))}")
     bs = cons["by_side"]
     print(f"by_side runs: median {bs['median_run']}, short(1-2) frac {bs['short_run_frac']}, runs {bs['runs']}")
     if "by_player" in cons:

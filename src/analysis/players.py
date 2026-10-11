@@ -13,21 +13,23 @@ fraction of the frame or of a body/box size, so no rule depends on the reference
 Keypoints are COCO-17 (0 nose, 1/2 eyes, 3/4 ears, 5/6 shoulders, 7/8 elbows,
 9/10 wrists, 11/12 hips, 13/14 knees, 15/16 ankles); NaN where absent.
 
-NEAR-PLAYER-FIRST. On the beta-tennis footage the far player is essentially never
-detected (shipped far record present in 0.02-0.1 % of frames; the raw pre-court-filter
-detections hold a far-court person in < 0.01 %: the 960-px pose pass misses it). Every
-decision therefore works from the near player alone; far-player paths are optional,
-best effort, and marked "[far, optional]" below. A far-court crop / higher-res pose
-pass is what would make them useful: the v0.6.0 runtime's net-line slots take the far
-player from a far-court crop pass, and ``PlayerTracks`` prefers that record.
+NEAR-PLAYER-FIRST, far when observed. With the v0.5.0 pose pass the far player was
+essentially never detected on the beta-tennis footage (40-55 px tall), so every decision
+works from the near player and far-player paths are marked "[far, optional]" below.
+The v0.6.0 runtime's net-line slots take the far player from the geometry-driven,
+upscaled far-court crop pass (present in ~80 % of all frames and > 95 % of in-point
+frames on beta-tennis), and ``PlayerTracks`` prefers that record; ``detect_server`` then
+observes far serves directly ("far_reach") instead of inferring them by elimination.
 
 Heuristics (documented, deliberately simple; appearance features replace them later):
 
 * ``detect_server`` - the server tosses and hits overhead within ~2.5 s of the point
   start: a wrist above the head with the arm extended. The receiver does not. Near
-  raises -> near serves; near clearly seen and never reaching overhead -> far serves
-  ("elimination"). [far, optional]: a far player's own raise is scored the same way
-  when it happens to be detected.
+  raises -> near serves. [far, optional]: a far player's own raise is scored the same
+  way; at 40-55 px the far wrist rarely clears the head with the arm "extended" in a
+  5 fps sample, so a far player whose wrist peaks near or above head height while the
+  near player never raises serves ("far_reach", direct observation). Near clearly seen
+  and never reaching overhead and the far player unseen -> far serves ("elimination").
 * ``pick_far_player`` - [far, optional] best-effort far player from raw detections.
 * ``track_identities`` - ids "A"/"B" (A = near player of the first point). Ends change
   after games 1, 3, 5, ... A changeover is scored from the gap before the point, a
@@ -78,6 +80,10 @@ class PlayerAnalysisConfig:
     elimination_confidence: float = 0.3
     elimination_min_valid: float = 0.7  # near arm keypoints valid in >= this fraction of the window
     elimination_max_far_present: float = 0.3
+    far_reach: bool = True            # far serves if near never raises and the far wrist peaks high
+    far_reach_min: float = -0.4       # peak far wrist height above the head, torso lengths
+    far_reach_min_present: float = 0.3  # far player present in >= this fraction of the window
+    far_reach_conf_span: float = 0.5  # confidence 0.3 at far_reach_min -> 0.9 this far above it
     # --- identity / side changes
     gap_lo_s: float = 35.0            # gap score 0 at/below this gap
     gap_mid_s: float = 60.0           # gap score 0.6 here ("strong hint")
@@ -470,6 +476,25 @@ def arm_raised(kp: np.ndarray, box: np.ndarray, cfg: PlayerAnalysisConfig = DEFA
     return raised, valid
 
 
+def wrist_reach(kp: np.ndarray, box: np.ndarray) -> np.ndarray:
+    """Per frame: the higher wrist's height above the head in body-scale units (torso
+    length, see ``_body_scale``); > 0 = above the highest head keypoint (head assumed
+    0.35 units above the shoulders when no head keypoint is seen), NaN when unobserved.
+    Softer than ``arm_raised`` (no extension test): used for the small far player, whose
+    5 fps serve samples seldom catch a fully extended arm."""
+    kp = np.asarray(kp, dtype=np.float64)
+    box = np.asarray(box, dtype=np.float64)
+    if kp.shape[0] == 0:
+        return np.zeros(0)
+    scale = _body_scale(kp, box)
+    head_y = _nanmin(kp[:, HEAD_KPS, 1], axis=1)
+    shoulder_y = _nanmin(kp[:, (L_SHOULDER, R_SHOULDER), 1], axis=1)
+    head_y = np.where(np.isfinite(head_y), head_y, shoulder_y - 0.35 * scale)
+    wrist_y = _nanmin(kp[:, (L_WRIST, R_WRIST), 1], axis=1)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        return (head_y - wrist_y) / scale
+
+
 # ------------------------------------------------------------------ far player
 
 
@@ -615,7 +640,8 @@ def _side_serve_evidence(tracks, side, idx, t_start, cfg, foot_sorted) -> Dict[s
     s = tracks.side(side)
     n = idx.size
     ev: Dict[str, Any] = {"frames": int(n), "present_frac": 0.0, "arm_valid_frac": 0.0,
-                          "raise_frames": 0, "first_raise_s": None, "baseline_rank": None, "score": 0.0}
+                          "raise_frames": 0, "first_raise_s": None, "baseline_rank": None, "score": 0.0,
+                          "reach": None, "reach_s": None}
     if n == 0:
         return ev
     present = np.asarray(s.present, dtype=bool)[idx]
@@ -623,6 +649,11 @@ def _side_serve_evidence(tracks, side, idx, t_start, cfg, foot_sorted) -> Dict[s
     kp = s.valid_keypoints(cfg.kp_conf_min)[idx]
     raised, valid = arm_raised(kp, s.box[idx], cfg)
     ev["arm_valid_frac"] = round(float(valid.mean()), 3)
+    reach = wrist_reach(kp, s.box[idx])
+    if np.isfinite(reach).any():
+        j = int(np.nanargmax(reach))
+        ev["reach"] = round(float(reach[j]), 3)
+        ev["reach_s"] = round(float(tracks.timestamps[idx[j]] - t_start), 2)
     k = int(raised.sum())
     ev["raise_frames"] = k
     if k:
@@ -654,8 +685,12 @@ def detect_server(
     the head with the arm extended (see ``arm_raised``), times ``baseline_penalty`` when
     the player is in the front half of their own depth range at the first raise. The
     higher-scoring side (score >= ``min_side_score``) serves; confidence = its score minus
-    the other side's. In practice only the near side ever scores (the far player is not
-    detected; its raise path is [far, optional]). When neither side qualifies but the
+    the other side's ("raise"). The far player rarely scores a raise (40-55 px tall at
+    5 fps); when neither side qualifies, the near player never raises and the far player
+    is present in >= ``far_reach_min_present`` of the window with a peak wrist height
+    (``wrist_reach``) >= ``far_reach_min`` torso lengths, the far player serves
+    ("far_reach"; confidence 0.3 at the threshold up to 0.9 at ``far_reach_conf_span``
+    above it; the peak time stands in for the first raise). When none of that holds but the
     near player is well observed (arm keypoints valid in >= ``elimination_min_valid`` of
     frames: standing, then reacting, never reaching overhead = receiving) and the far
     player is not seen serving (present in <= ``elimination_max_far_present`` of the
@@ -677,6 +712,19 @@ def detect_server(
     if hi >= cfg.min_side_score and hi > lo:
         evidence["method"] = "raise"
         return {"server": best, "confidence": round(hi - lo, 3), "evidence": evidence}
+    far = ev["far"]
+    if (
+        cfg.far_reach
+        and ev["near"]["raise_frames"] == 0
+        and far["reach"] is not None
+        and far["reach"] >= cfg.far_reach_min
+        and far["present_frac"] >= cfg.far_reach_min_present
+    ):
+        evidence["method"] = "far_reach"
+        if far["first_raise_s"] is None:
+            far["first_raise_s"] = far["reach_s"]  # serve moment for analysis.serve_side
+        margin = (far["reach"] - cfg.far_reach_min) / max(1e-6, cfg.far_reach_conf_span)
+        return {"server": "far", "confidence": round(0.3 + 0.6 * min(1.0, margin), 3), "evidence": evidence}
     if (
         cfg.elimination
         and ev["near"]["raise_frames"] == 0
@@ -947,7 +995,8 @@ def analyze_points(
     score_confidence: Optional[float] = None,
     serve_cfg: Any = None,
 ) -> List[Dict[str, Any]]:
-    """One dict per point: start_s, end_s, server, server_confidence, server_id,
+    """One dict per point: start_s, end_s, server, server_confidence, server_method
+    (``detect_server`` evidence method: raise / far_reach / elimination / none), server_id,
     near_id, far_id, identity_confidence, side_change_before, near_present_frac,
     far_present_frac, plus the serve-side fields ``analysis.serve_side.ROW_KEYS``
     (serve_side, serve_side_confidence, serve_side_source, serve_side_score,
@@ -976,6 +1025,7 @@ def analyze_points(
             "end_s": round(e, 3),
             "server": side,
             "server_confidence": srv["confidence"],
+            "server_method": srv["evidence"]["method"],
             "server_id": server_id,
             "near_id": ident["near_id"],
             "far_id": ident["far_id"],

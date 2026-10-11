@@ -13,6 +13,7 @@ import pytest
 
 from analysis.players import (
     SIGNATURE_KEYS,
+    PlayerAnalysisConfig,
     PlayerTracks,
     SideTrack,
     analyze_points,
@@ -23,6 +24,7 @@ from analysis.players import (
     points_document,
     serve_consistency,
     track_identities,
+    wrist_reach,
 )
 from analysis.serve_side import ROW_KEYS
 from rallyclip_core.contracts import RunRequest, RunResult, RuntimeDeps
@@ -111,6 +113,43 @@ def test_detect_server_far_by_elimination_when_far_undetected():
     assert out["server"] == "far"
     assert out["evidence"]["method"] == "elimination"
     assert 0.0 < out["confidence"] < 0.5
+
+
+def _far_reaching(t, start):
+    """Far server as the upscaled crop sees it at 5 fps: the wrist comes up to head
+    height 0.4-1.4 s after the start, but the arm never reads as extended."""
+    p = _pose(**FAR)
+    if start + 0.4 <= t <= start + 1.4:
+        h, cx, foot = FAR["h"], FAR["cx"], FAR["foot_y"]
+        p["keypoints"] = p["keypoints"].copy()
+        p["keypoints"][8] = (cx + 0.10 * h, foot - 0.84 * h)
+        p["keypoints"][10] = (cx + 0.05 * h, foot - 0.90 * h)
+    return p
+
+
+def test_wrist_reach_standing_vs_reaching():
+    still = _pose(**FAR)
+    reach = _far_reaching(1.0, 0.0)
+    r = wrist_reach(np.stack([still["keypoints"], reach["keypoints"]]), np.stack([still["box"], reach["box"]]))
+    assert r[0] < -1.0 and -0.4 < r[1] < 0.0
+
+
+def test_detect_server_far_by_reach_when_far_observed():
+    tracks = _tracks(20, near_fn=lambda t: _pose(**NEAR), far_fn=lambda t: _far_reaching(t, 5.0))
+    out = detect_server((5.0, 15.0), tracks)
+    assert out["server"] == "far"
+    assert out["evidence"]["method"] == "far_reach"
+    assert out["evidence"]["far"]["raise_frames"] == 0  # the strict raise test misses it
+    assert 0.3 <= out["confidence"] <= 0.9
+    assert 0.4 <= out["evidence"]["far"]["first_raise_s"] <= 1.4  # serve moment for the serve side
+    off = detect_server((5.0, 15.0), tracks, PlayerAnalysisConfig(far_reach=False))
+    assert off["server"] is None  # far is visible, so elimination does not apply either
+
+
+def test_detect_server_near_raise_beats_far_reach():
+    tracks = _tracks(20, near_fn=lambda t: _serving(t, 5.0, NEAR), far_fn=lambda t: _far_reaching(t, 5.0))
+    out = detect_server((5.0, 15.0), tracks)
+    assert out["server"] == "near" and out["evidence"]["method"] == "raise"
 
 
 def test_detect_server_missing_keypoints_is_none():
@@ -252,7 +291,7 @@ def test_analyze_points_rows_and_document():
     rows = analyze_points([{"start_s": s, "end_s": e} for s, e in pts], tracks)
     assert len(rows) == 8
     assert set(rows[0]) == {
-        "start_s", "end_s", "server", "server_confidence", "server_id", "near_id", "far_id",
+        "start_s", "end_s", "server", "server_confidence", "server_method", "server_id", "near_id", "far_id",
         "identity_confidence", "side_change_before", "near_present_frac", "far_present_frac",
         *ROW_KEYS,
     }
