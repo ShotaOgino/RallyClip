@@ -116,6 +116,13 @@
       "status": "passing",
       "verification": "PYTHONPATH=src:tests $PY -m pytest -q -p no:cacheprovider tests/test_score.py; PYTHONPATH=src $PY scripts/eval/reconstruct_score.py --servers-json <name>_points.json",
       "evidence": "2026-10-11 (uv .venv py3.12.7 (--extra cpu --extra dev --extra train), shota Mac M3): 32 passed. reconstruct_score.py --servers-json on the golden clip's points.json runs (1 point, server unknown); on a synthetic 12-point A/B/A list: agreement 1.000, 3 games."
+    },
+    {
+      "id": "far-crop-upscale",
+      "name": "v0.6.0 far-court crop pass: geometry-driven window + upscale; far-slot in-court/static guards",
+      "status": "passing",
+      "verification": "PYTHONPATH=src:tests $PY -m pytest -q -p no:cacheprovider tests/test_crop_pass.py tests/test_netline_slots.py tests/test_runtime_v2_path.py tests/test_cli_golden_parity.py; eval: dump_tracks_v060.py --start-time 0 --duration 600 on 2026_08_24_2R_Tsukamoto_Takeda vs its tdproj",
+      "evidence": "2026-10-11 (macOS, .venv py3.12): far present in true points 6/778 (0.8%) -> 761/778 (97.8%) CoreML default, 777/778 (99.9%) CPU on the first 10 min of 2R; pose cost per frame 1.02x CPU / 1.00x CoreML (interleaved micro-benchmark); golden parity 1 passed (no regen). See docs/DECISIONS.md 2026-10-11."
     }
   ],
   "active": "phase1-player-identity"

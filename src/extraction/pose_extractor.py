@@ -7,7 +7,7 @@ import logging
 import numpy as np
 from tqdm import tqdm
 
-from extraction.crop_pass import crop_frame, crop_to_frame, merge_detections
+from extraction.crop_pass import CROP_OUT_SIZE, crop_frame, crop_to_frame, merge_detections
 
 
 def _pipeline_profile() -> str:
@@ -304,6 +304,8 @@ class PoseExtractor:
         annotations_csv: Optional[str] = None,
         progress_callback: Optional[Callable[[float], None]] = None,
         crop_window: Optional[Sequence[float]] = None,
+        crop_out_size: Optional[Sequence[int]] = None,
+        crop_imgsz: Optional[int] = None,
     ):
         """Streaming pose extraction core (generator).
 
@@ -316,9 +318,24 @@ class PoseExtractor:
         With ``crop_window`` (fractional x1, y1, x2, y2), each processed frame also
         gets a second pass on that window (see extraction.crop_pass), stored under
         ``frame_data["crop"]`` in the same keys, mapped back to frame pixels.
+        ``crop_out_size`` (w, h) is what the crop is resized to before YOLO (default
+        CROP_OUT_SIZE, native scale on 1080p) and ``crop_imgsz`` its predict size
+        (default: the full-frame ``imgsz``); an upscaled geometry-driven crop
+        (extraction.crop_pass.adaptive_crop) sets both.
         """
         import csv
         predict_imgsz = int(self.imgsz if imgsz is None else imgsz)
+        crop_size = tuple(int(v) for v in (crop_out_size or CROP_OUT_SIZE))
+        crop_predict_imgsz = int(predict_imgsz if crop_imgsz is None else crop_imgsz)
+        static_hw = getattr(self.model, "static_input_hw", None)
+        if crop_window is not None and isinstance(static_hw, tuple):
+            # Static-shape export (CoreML): it letterboxes to its own canvas and
+            # ignores imgsz, so shrink an upscaled crop to fit that canvas once
+            # here rather than resizing it twice. The fixed 960x540 crop already
+            # fits 544x960 and is untouched.
+            fit = min(1.0, static_hw[1] / crop_size[0], static_hw[0] / crop_size[1])
+            if fit < 1.0:
+                crop_size = (max(1, int(round(crop_size[0] * fit))), max(1, int(round(crop_size[1] * fit))))
 
         annotations = None
         if annotations_csv and annotations_csv != "None" and os.path.exists(annotations_csv):
@@ -372,14 +389,14 @@ class PoseExtractor:
         batch_frames = []
         batch_positions = []  # index within `pending` of each batched (processed) frame
 
-        def _predict(frames):
+        def _predict(frames, size=predict_imgsz):
             try:
                 return self.model.predict(
                     source=frames,
                     verbose=False,
                     device=self.device,
                     conf=confidence_threshold,
-                    imgsz=predict_imgsz,
+                    imgsz=size,
                     batch=self.batch_size,
                 )
             except TypeError:
@@ -388,7 +405,7 @@ class PoseExtractor:
                     verbose=False,
                     device=self.device,
                     conf=confidence_threshold,
-                    imgsz=predict_imgsz,
+                    imgsz=size,
                 )
 
         def _flush_batch():
@@ -398,7 +415,8 @@ class PoseExtractor:
             results = _predict(batch_frames)
             crop_results = None
             if crop_window is not None:
-                crop_results = _predict([crop_frame(f, crop_window) for f in batch_frames])
+                crop_results = _predict([crop_frame(f, crop_window, crop_size) for f in batch_frames],
+                                        crop_predict_imgsz)
             for i, res in enumerate(results):
                 pos = batch_positions[i]
                 frame_data = _result_arrays(res)
@@ -407,7 +425,7 @@ class PoseExtractor:
                     if len(crop["boxes"]):
                         b, bc, k, kc = merge_detections(crop["boxes"], crop["box_conf"], crop["keypoints"], crop["conf"])
                         fh, fw = batch_frames[i].shape[:2]
-                        b, k = crop_to_frame(b, k, fw, fh, crop_window)
+                        b, k = crop_to_frame(b, k, fw, fh, crop_window, crop_size)
                         crop = {"boxes": b, "box_conf": bc, "keypoints": k, "conf": kc}
                     frame_data["crop"] = crop
                 frame_data["annotation_status"] = pending[pos].get("annotation_status", 0)

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import types
 from pathlib import Path
 
 import numpy as np
@@ -517,7 +518,8 @@ def test_build_feature_stream_hands_netline_geometry_to_the_sink(tmp_path, monke
                 yield 0, {"near": None, "far": None}
 
     seen = {}
-    geom = object()
+    # No far-baseline corners -> the far crop falls back to the fixed window.
+    geom = types.SimpleNamespace(far_left=None, far_right=None, net_a=None, net_b=None)
     monkeypatch.setattr(engine_models, "_court_geometry", lambda request, cfg, size: geom)
     manifest = tmp_path / "manifest.json"
     manifest.write_text(json.dumps({"feature_pipeline": {"feature_set": "v2_nearfar", "slot_mode": "netline"}}),
