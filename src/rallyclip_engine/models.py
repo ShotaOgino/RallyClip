@@ -140,9 +140,7 @@ def build_feature_stream(
         _emit(progress_callback, "pose", 3)
     pose_kwargs = {}
     if geometry is not None:
-        from extraction.crop_pass import CROP_WINDOW
-
-        pose_kwargs["crop_window"] = tuple(feature_cfg.get("crop_window") or CROP_WINDOW)
+        pose_kwargs.update(_far_crop_kwargs(geometry, feature_cfg, (int(request.screen_width), int(request.screen_height))))
     pose_stream = extractor.iter_pose_frames(
         video_path=str(request.video_path),
         confidence_threshold=float(request.conf),
@@ -192,6 +190,37 @@ def _manifest_feature_pipeline(request: RunRequest) -> dict:
         return dict(json.loads(path.read_text(encoding="utf-8")).get("feature_pipeline") or {})
     except Exception:
         return {}
+
+
+def _far_crop_kwargs(geometry, feature_cfg: dict, reference_size) -> dict:
+    """iter_pose_frames crop-pass kwargs: the geometry-driven, upscaled far-court
+    window when the court model found the far baseline, else the fixed window.
+
+    manifest feature_pipeline.far_crop: {"mode": "adaptive" (default) | "fixed",
+    plus any extraction.crop_pass.ADAPTIVE_DEFAULTS key}. The fixed fallback
+    passes only crop_window, so it is exactly the pre-adaptive crop pass.
+    """
+    import logging
+
+    from extraction.crop_pass import CROP_WINDOW, adaptive_crop
+
+    fixed = {"crop_window": tuple(feature_cfg.get("crop_window") or CROP_WINDOW)}
+    cfg = dict(feature_cfg.get("far_crop") or {})
+    mode = str(cfg.pop("mode", "adaptive"))
+    if mode == "fixed":
+        return fixed
+    if mode != "adaptive":
+        raise UnsupportedPipelineError(f"Unsupported far_crop mode='{mode}'.")
+    spec = adaptive_crop(geometry.far_left, geometry.far_right, geometry.net_a, geometry.net_b, reference_size, **cfg)
+    if spec is None:
+        logging.warning("Far-court crop: no far baseline in the court geometry; using the fixed window.")
+        return fixed
+    logging.info(
+        "Far-court crop: window %s (reference px), %.2fx -> %dx%d, imgsz %d",
+        [round(v * s) for v, s in zip(spec.window, reference_size * 2)],
+        spec.scale, spec.out_size[0], spec.out_size[1], spec.imgsz,
+    )
+    return {"crop_window": spec.window, "crop_out_size": spec.out_size, "crop_imgsz": spec.imgsz}
 
 
 def _court_geometry(request: RunRequest, feature_cfg: dict, reference_size):

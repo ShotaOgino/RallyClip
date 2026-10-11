@@ -1,5 +1,31 @@
 # PROGRESS — overwrite me at every session end
 
+_Last updated: 2026-10-11 (feat/far-crop-upscale, local only, not pushed)._
+
+## Current state — far-court crop pass (v0.6.0 runtime)
+
+- `extraction.crop_pass.adaptive_crop`: far-court window from the court geometry's far-baseline
+  corners + net line, upscaled so the far player is ~110 px; fixed window stays the fallback
+  (no far corners / manifest `far_crop.mode: fixed`). Threaded through
+  `rallyclip_engine.models._far_crop_kwargs` -> `PoseExtractor.iter_pose_frames(crop_out_size, crop_imgsz)`;
+  static CoreML canvas fit in the extractor.
+- `netline_slots.pick_far`: in-far-court > static-in-court > off-court tiers; static off-court
+  candidates never picked (`StaticDetections`); counters on `DataPreprocessor.far_pick_stats`.
+- 2R first 10 min: far present inside true points 0.8% -> 97.8% (CoreML) / 99.9% (CPU) at
+  ~1.0x (CoreML) / ~1.02-1.06x (CPU) pose cost. Details: docs/DECISIONS.md 2026-10-11.
+- Gate: 407 passed, 12 skipped, 27 deselected (torch-only modules ignored, see testing.md);
+  golden parity passes without regeneration.
+
+## Next steps
+
+1. Re-extract training crop poses with the adaptive window (`scripts/extract_crop_poses.py` still
+   uses the fixed window) and retrain, so train/serve far features match.
+2. Evaluate segment accuracy on all labeled beta-tennis matches with the new crop (only a
+   10-min segment sanity check so far: unchanged 12/17 matches).
+
+---
+
+
 _Last updated: 2026-09-09 (session: assisted DMG update, Greptile cancel + checksum)._
 
 _Last updated: 2026-07-19 (session 2: pose contract landed; **YOLO26 reversed → YOLOv8 + CoreML** after ANE benchmarks; unified training_data root; normalize running)._

@@ -324,8 +324,15 @@ class DataPreprocessor:
         geometry (preprocessing.netline_slots.CourtGeometry, reference pixels):
         net-line slots -- near from full-frame boxes below the net, far from the
         crop pass (frame_data["crop"]). None: classic near/far assignment.
+
+        Far-slot debug counters (netline_slots.new_far_stats: frames, picks, picks
+        outside the far court, static picks/rejections) end up on
+        ``self.far_pick_stats`` and are logged once the stream is exhausted.
         """
-        from preprocessing.netline_slots import below_net_mask, pick_far
+        from preprocessing.netline_slots import StaticDetections, below_net_mask, new_far_stats, pick_far
+
+        self.far_pick_stats = stats = new_far_stats()
+        static_tracker = StaticDetections()
 
         mask = self._mask_to_reference(court_mask)
         sx = self.screen_width / src_width if src_width > 0 else 1.0
@@ -344,9 +351,12 @@ class DataPreprocessor:
             near = self.assign_players({k: v[below] for k, v in full.items()})['near_player']
             far = None
             crop = frame_data.get('crop')
-            if crop is not None and len(crop.get('boxes', ())):
+            if crop is None or not len(crop.get('boxes', ())):
+                static_tracker.update(np.empty((0, 4), np.float32))
+                stats["frames"] += 1
+            else:
                 crop = _scale_detections(crop, sx, sy)
-                i = pick_far(crop['boxes'], mask, geometry)
+                i = pick_far(crop['boxes'], mask, geometry, static_tracker.update(crop['boxes']), stats)
                 if i is not None:
                     far = {
                         'box': crop['boxes'][i],
@@ -355,6 +365,12 @@ class DataPreprocessor:
                         'box_conf': crop['box_conf'][i],
                     }
             yield status, {'near': near, 'far': far}
+        if geometry is not None:
+            logging.info(
+                "Far slot: %d/%d frames picked (%d outside the far court, %d static); %d static off-court rejections",
+                stats["picked"], stats["frames"], stats["outside_court"], stats["static_picked"],
+                stats["static_rejected"],
+            )
 
     def _mask_to_reference(self, mask):
         if mask is None:

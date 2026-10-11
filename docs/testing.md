@@ -16,7 +16,13 @@ equivalent alternative; `.venv-train` is what was verified 2026-07-03.)
 PYTHONPATH=src:tests $PY -m pytest -q -m "not slow and not e2e" -p no:cacheprovider
 ```
 
-Last known (2026-09-09, assisted DMG update, Linux py3.12):
+Last known (2026-10-11, feat/far-crop-upscale, macOS py3.12 `.venv` without the `[train]` extra, so the 8
+torch-only test modules were `--ignore`d: test_checkpoint_arch, test_heatmap_loss, test_heatmap_pairdp,
+test_heatmap_tcn, test_pos_weight, test_seg_loss, test_train_head_dispatch, test_train_smoke_both_heads):
+**407 passed, 12 skipped, 27 deselected, ~140s** (baseline before the branch: 380 passed + 2 GUI latency
+benchmarks failing under machine load; +25 in `tests/test_crop_pass.py`). Golden parity 1 passed.
+
+Previous (2026-09-09, assisted DMG update, Linux py3.12):
 **321 passed, 6 skipped, 27 deselected, ~20s**. `tests/test_release_packaging.py` 21 passed;
 `tests/test_artifact_fetch.py` 6 passed.
 

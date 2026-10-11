@@ -444,3 +444,68 @@ data/labels/metric, not optimization.** Do not re-run these:
 
 **Next (not optimization): serve-convention label fix (§3b-ii) + absolute-time metric
 (§3b-iii).** All the above dead ends point there.
+
+## 2026-10-11 — Far-court crop pass: geometry-driven window, upscaled (branch feat/far-crop-upscale)
+
+**Problem (customer footage, Japanese junior matches, fixed high rear camera, 1080p59.94).**
+The court model finds the far baseline (~(756,408)-(1106,397) px, net y~460-474) but the
+far player is only ~40-55 px tall. The fixed crop (0.25,0,0.75,0.5) at native scale
+(960x540) detected them in ~1/6 of in-play frames: on the first 10 min of
+2026_08_24_2R_Tsukamoto_Takeda the far slot was present in 226/3001 kept frames
+(7.5%) and only **6/778 (0.8%) of frames inside true points** (tdproj clips, validation
+!= deleted).
+
+**Decision.** When the court geometry carries both far-baseline corners,
+`extraction.crop_pass.adaptive_crop` replaces the fixed window: x = far corners widened
+by 0.35 x baseline width each side; y = from max(1.2 x baseline-to-net distance, 0.3 x
+baseline width) above the far baseline to 0.15 x that distance below the net line;
+clamped to the frame. The crop is upscaled so a 1.6 m player at the far baseline
+(baseline = 10.97 m doubles width) reaches ~110 px (clamped 1x-3x, long side <= 1920,
+long side rounded to a multiple of 32 and used as the crop's imgsz so the letterbox is
+a pure pad). On 2R: window (633,292)-(1229,485), 2.2x -> 1312x424, imgsz 1312. All
+parameters are overridable via manifest `feature_pipeline.far_crop` (`mode: fixed`
+restores the old crop pass); defaults live in code because SHA256SUMS covers the
+shipped v0.6.0 manifest. On a static-shape (CoreML) export, which ignores imgsz, the
+crop is resized once to fit the 544x960 canvas (2R: 960x310, effective 1.61x) instead
+of being resized twice.
+
+**Unchanged:** geometry None -> no crop pass (classic slots), exactly as before; geometry
+without far corners -> the fixed window with the old out_size and the full-frame
+imgsz (only `crop_window` is passed, test-pinned). The near-player path and the v1
+feature path are untouched.
+
+**Far-slot guards (`netline_slots.pick_far`).** Within the existing meter gate,
+candidates are tiered: feet inside the far half-court (doubles sidelines + 1 m, net
+-0.5 m to baseline + 4 m) and moving > inside but frame-static > outside the court but
+moving; a static candidate outside the court (the bystander at ~(527,420) on 2R) is
+never picked. "Static" is a per-video `StaticDetections` tracker (pixel anchors,
+radius max(6 px, 0.3 x box height), static after >= 100 kept frames = 20 s with >= 60%
+hits). Counters (`frames/picked/outside_court/static_picked/static_rejected`) land on
+`DataPreprocessor.far_pick_stats` and are logged. The in-court tiering is stateless, so
+it also applies to the training preprocess (`_netline_players`) — future feature caches
+change only in frames where a gate-only candidate (deep behind the baseline / out wide)
+competed with an in-court one; the shipped v0.6.0 model was trained on the old rule.
+
+**Measured (10 min of 2R, default device = CoreML on this Mac).** Far present
+226/3001 (7.5%) -> 2639/3001 (87.9%); inside points 6/778 (0.8%) -> **761/778
+(97.8%)**. CPU EP (full 2.2x): 2675/3001 (89.1%), inside points **777/778 (99.9%)**.
+outside_court picks 108/3001 (player walking deep/wide between points), static picks
+26, static off-court rejections 0 (the bystander is outside the new window).
+Cost: interleaved per-frame micro-benchmark on 40 frames (same session) — CPU
+full 152.8 + fixed crop 160.7 = 313.5 ms -> full + adaptive crop 168.1 = 320.9 ms
+(**1.02x**); CoreML 37.7 -> 37.8 ms (**1.00x**, same static canvas). Wall clock on the
+10-min run, back-to-back on CoreML: 104 s -> 98 s (noise); CPU 681 s -> 886 s under fluctuating
+machine load, but within-run crop/full predict ratio 1.00 -> 1.12, i.e. pose time ~1.06x. Segment sanity (IoU>=0.5 vs
+15 true points in the 10 min): 12/17 matched before and after — unchanged.
+
+**Golden.** `tests/test_cli_golden_parity.py` exercises this path (the golden clip has
+full far corners -> adaptive window 1.45x). The CSV moves 4.752 -> 4.912 s on the
+first start edge on this machine (old code here already gives 4.752 vs the committed
+4.867 generated elsewhere), well inside the 0.5 s tolerance: the test passes and the
+golden was **not** regenerated.
+
+**Train/serve caveat.** v0.6.0 was trained with far features from the fixed native
+crop. On footage like 2R the far slot goes from ~absent to ~always present, i.e. closer
+to what training videos with a visible far player looked like, but keypoints now come
+from an upscaled crop. Retrain with the adaptive crop in `scripts/extract_crop_poses.py`
+before trusting accuracy deltas; the 10-min segment count is unchanged so far.

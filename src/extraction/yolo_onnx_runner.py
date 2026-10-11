@@ -343,6 +343,11 @@ class YOLO:
             else None
         )
 
+    @property
+    def static_input_hw(self) -> Optional[tuple[int, int]]:
+        """(H, W) canvas of a static-shape export (imgsz is ignored), else None."""
+        return self._static_hw
+
     def to(self, device) -> "YOLO":  # parity with ultralytics API; providers set at init
         return self
 
