@@ -19,6 +19,22 @@ PYTHONPATH=src $PY scripts/eval/score_stroke_labels.py \
   --events labels/2026_08_24_2R_Tsukamoto_Takeda.events.csv
 ```
 
+`events.csv` keeps the predictions made when the labels were written (the labeller never
+saw them). To re-score the *current* rules on the same labelled events (no video), re-run
+the detector with `--relabel` and score its output:
+
+```bash
+PYTHONPATH=src $PY scripts/eval/export_shot_frames.py \
+  --tracks logs/eval/beta-tennis-v060/2026_08_24_2R_Tsukamoto_Takeda.tracks.npz \
+  --gt <beta-tennis .tdproj dir> --include-between --out-dir <scratch> \
+  --relabel labels/2026_08_24_2R_Tsukamoto_Takeda.events.csv
+PYTHONPATH=src $PY scripts/eval/score_stroke_labels.py \
+  --labels labels/2026_08_24_2R_Tsukamoto_Takeda.shot_labels.csv --events <scratch>/events.csv
+```
+
+Events the current detector no longer fires on get `predicted_stroke = none` (`detected = 0`);
+the scorer then also reports the false-event rate and swing recall.
+
 ## Provenance
 
 - **Labeller:** `claude-opus-pseudo` (Claude Opus 5.5). It looked at one PNG per event:
