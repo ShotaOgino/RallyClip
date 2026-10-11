@@ -352,6 +352,190 @@ def test_gui_config_forces_yolo_nano():
     assert normalized["yolo_weights"] == gui_app.FIXED_YOLO_MODEL
 
 
+def test_normalize_config_accepts_heatmap_decode_overrides():
+    from rallyclip_core.contracts import coerce_decode_overrides
+    from gui import app as gui_app
+
+    # Unset by default: the manifest's postprocess.params rule.
+    assert coerce_decode_overrides(gui_app._normalize_config({})) is None
+
+    cfg = gui_app._normalize_config({"threshold": "0.7", "end_pad_sec": 1.5, "merge_gap_sec": None})
+    assert cfg["threshold"] == 0.7  # coerced to float
+    assert coerce_decode_overrides(cfg) == {"threshold": 0.7, "end_pad_sec": 1.5}
+
+    with pytest.raises(ValueError, match="threshold"):
+        gui_app._normalize_config({"threshold": 2.0})
+
+
+def test_upload_rejects_invalid_decode_override_with_400():
+    import io
+    import json as _json
+
+    from gui import app as gui_app
+
+    response = gui_app.app.test_client().post(
+        "/api/upload-and-start",
+        data={
+            "video": (io.BytesIO(b"fake"), "match.mp4"),
+            "config": _json.dumps({"end_pad_sec": -1}),
+        },
+        content_type="multipart/form-data",
+    )
+    assert response.status_code == 400
+    assert "end_pad_sec" in response.get_json()["error"]
+
+
+def test_decode_presets_are_valid_overrides_and_match_cli_profile():
+    import tomllib
+
+    from rallyclip_core.contracts import coerce_decode_overrides
+    from gui import app as gui_app
+
+    assert gui_app.DEFAULT_DECODE_PRESET in gui_app.DECODE_PRESETS
+    for preset in gui_app.DECODE_PRESETS.values():
+        # Every preset param is a known, in-range decode override.
+        assert (coerce_decode_overrides(preset["params"]) or {}) == preset["params"]
+    # The GUI preset and the CLI profile are the same numbers.
+    profile = Path(__file__).resolve().parents[1] / "configs" / "decode" / "jp-junior.toml"
+    run = tomllib.loads(profile.read_text(encoding="utf-8"))["run"]
+    assert gui_app.DECODE_PRESETS["jp-junior"]["params"] == coerce_decode_overrides(run)
+
+
+def test_normalize_config_resolves_decode_preset_and_explicit_keys_win():
+    from rallyclip_core.contracts import coerce_decode_overrides
+    from gui import app as gui_app
+
+    default = gui_app._normalize_config({})
+    assert default["decode_preset"] == "default"
+    assert coerce_decode_overrides(default) is None
+    assert coerce_decode_overrides(gui_app._normalize_config({"decode_preset": ""})) is None
+
+    jp = gui_app._normalize_config({"decode_preset": "jp-junior"})
+    assert jp["decode_preset"] == "jp-junior"
+    assert coerce_decode_overrides(jp) == {
+        "threshold": 0.5,
+        "smooth_sigma_frames": 1.5,
+        "merge_gap_sec": 0.0,
+        "hybrid_min_duration_sec": 1.0,
+        "end_pad_sec": 1.6,
+    }
+
+    mixed = gui_app._normalize_config(
+        {"decode_preset": "jp-junior", "threshold": 0.7, "merge_gap_sec": 0.4, "end_pad_sec": None}
+    )
+    assert coerce_decode_overrides(mixed) == {
+        "threshold": 0.7,  # explicit beats the preset's 0.5
+        "smooth_sigma_frames": 1.5,
+        "hybrid_min_duration_sec": 1.0,
+        "end_pad_sec": 1.6,  # None means "not set", so the preset value stays
+        "merge_gap_sec": 0.4,  # explicit beats the preset's 0.0
+    }
+
+    for bad in ("nope", 3, ["jp-junior"]):
+        with pytest.raises(ValueError, match="decode preset"):
+            gui_app._normalize_config({"decode_preset": bad})
+
+
+def _post_upload(gui_app, config):
+    import io
+    import json as _json
+
+    return gui_app.app.test_client().post(
+        "/api/upload-and-start",
+        data={
+            "video": (io.BytesIO(b"fake"), "match.mp4"),
+            "config": _json.dumps(config),
+        },
+        content_type="multipart/form-data",
+    )
+
+
+def test_upload_rejects_unknown_decode_preset_with_400():
+    from gui import app as gui_app
+
+    response = _post_upload(gui_app, {"decode_preset": "no-such-preset"})
+    assert response.status_code == 400
+    error = response.get_json()["error"]
+    assert "no-such-preset" in error
+    assert "jp-junior" in error
+
+
+@pytest.mark.parametrize(
+    ("config", "expected"),
+    [
+        ({}, None),
+        ({"decode_preset": "default"}, None),
+        (
+            {"decode_preset": "jp-junior"},
+            {"threshold": 0.5, "smooth_sigma_frames": 1.5, "merge_gap_sec": 0.0,
+             "hybrid_min_duration_sec": 1.0, "end_pad_sec": 1.6},
+        ),
+        (
+            {"decode_preset": "jp-junior", "end_pad_sec": 0.5},
+            {"threshold": 0.5, "smooth_sigma_frames": 1.5, "merge_gap_sec": 0.0,
+             "hybrid_min_duration_sec": 1.0, "end_pad_sec": 0.5},
+        ),
+    ],
+)
+def test_upload_decode_preset_reaches_run_request(tmp_path, monkeypatch, config, expected):
+    from types import SimpleNamespace
+
+    import rallyclip_engine
+    from gui import app as gui_app
+
+    started = {}
+
+    def fake_start(upload_path, cfg):
+        started["upload"] = upload_path
+        started["cfg"] = cfg
+        return upload_path.parent.name
+
+    monkeypatch.setattr(gui_app, "JOBS_DIR", tmp_path / "jobs")
+    monkeypatch.setattr(gui_app, "_start_analysis_job", fake_start)
+    response = _post_upload(gui_app, config)
+    assert response.status_code == 200, response.get_json()
+    assert started["cfg"]["decode_preset"] == config.get("decode_preset", "default")
+
+    captured = {}
+
+    def fake_run_analysis(request, **_kwargs):
+        captured["request"] = request
+        return SimpleNamespace(frame_segments=[], intervals_sec=[])
+
+    runtime = SimpleNamespace(
+        np=None,
+        PoseExtractionCancelled=None,
+        PoseExtractor=None,
+        DataPreprocessor=None,
+        FeatureEngineer=None,
+        load_scaler_asset=None,
+        load_model_from_checkpoint=None,
+        run_windowed_inference_average_onnx_stream=None,
+        run_windowed_inference_average_torch_stream=None,
+        gaussian_filter1d=None,
+        hysteresis_threshold=None,
+        extract_segments_from_binary=None,
+        write_segments_csv=None,
+        apply_pose_device=None,
+    )
+    monkeypatch.setattr(rallyclip_engine, "run_analysis", fake_run_analysis)
+    monkeypatch.setattr(gui_app, "_get_analysis_runtime", lambda: runtime)
+    monkeypatch.setattr(gui_app, "segment_video", lambda *a, **k: None)
+    monkeypatch.setattr(gui_app, "_estimate_duration_seconds", lambda _path: 60.0)
+    monkeypatch.setattr(gui_app, "_resolve_yolo_weights", lambda _cfg: "pose.onnx")
+    monkeypatch.setattr(
+        gui_app, "_resolve_model_paths", lambda _cfg: (tmp_path / "model.onnx", tmp_path / "scaler.json")
+    )
+    job = gui_app._new_job_state("job-preset", started["cfg"])
+    job["paths"]["upload"] = str(started["upload"])
+    monkeypatch.setattr(gui_app, "jobs", {"job-preset": job})
+
+    gui_app._run_pipeline("job-preset")
+
+    assert job["status"] == "completed", job.get("error")
+    assert captured["request"].decode_params == expected
+
+
 def test_normalize_config_does_not_sticky_default_pipeline():
     from gui import app as gui_app
 

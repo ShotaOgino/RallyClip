@@ -1,0 +1,27 @@
+# RallyClip decode profile: Japanese junior matches labelled with beta-tennis tdproj
+# (fixed rear camera, 1080p60). Values re-measured for the v0.6.0 artifact
+# (rallyclip_v0.6.0, heatmap_hybrid) on beta-tennis 2R: point F1 (IoU>=0.5) 0.83 with
+# the manifest defaults -> 0.925 with this profile. (The v0.5.0 profile was
+# threshold 0.65 / hybrid_min_duration_sec 1.0 / end_pad_sec 1.6; on v0.6.0 the higher
+# threshold no longer helped.) See docs/DECISIONS.md and docs/PROGRESS.md.
+# Use: rallyclip --config configs/decode/jp-junior.toml --video ...
+# or merge the five decode keys into your own config.toml [run] section. Model
+# contract values (fps, imgsz, ...) still come from the manifest. All five keys are
+# set explicitly so the profile does not depend on the manifest's decode defaults.
+# The GUI's "jp-junior" decode preset (src/gui/app.py DECODE_PRESETS) mirrors these
+# values (test-enforced).
+[run]
+write_csv = true
+segment_video = true
+
+# Pointness threshold (= the v0.6.0 manifest value).
+threshold = 0.5
+# Pointness smoothing (= the v0.6.0 manifest value).
+smooth_sigma_frames = 1.5
+# No gap merging (= the v0.6.0 manifest value).
+merge_gap_sec = 0.0
+# Post-merge duration floor: the manifest's 4.0 s drops short real points
+# (aces, double faults, return errors) on this footage; 1.0 s keeps them.
+hybrid_min_duration_sec = 1.0
+# beta-tennis labels keep ~80 frames (1.33 s) after the point; pad ends to match.
+end_pad_sec = 1.6

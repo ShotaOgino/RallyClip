@@ -50,6 +50,7 @@ from gui.update_release import (
 from runtime.assets import candidate_roots, resolve_asset
 from runtime.defaults import DEFAULT_ARTIFACT_DIR, build_gui_defaults
 from runtime.paths import resolve_frontend_dir
+from rallyclip_core.contracts import coerce_decode_overrides
 from rallyclip_core.intervals import read_point_intervals, write_point_intervals
 from rallyclip_core.library import EDITED_SEGMENTS_FILENAME, SavedMatchStore, new_item_id
 from rallyclip_core.playback import build_playback_manifest, playback_manifest_payload
@@ -251,7 +252,32 @@ ADVANCED_WARNINGS = {
 }
 
 app = Flask(__name__, static_folder=str(STATIC_DIR), static_url_path="/")
-app.config["MAX_CONTENT_LENGTH"] = 2 * 1024 * 1024 * 1024  # 2 GB — matches UI cap
+
+def _max_upload_bytes() -> int:
+    """Upload size cap for /api/upload-and-start.
+
+    Full-match recordings routinely exceed the old 2 GB cap (an hour of
+    1080p60 phone footage is 5-8 GB), and the upload is streamed to disk by
+    werkzeug rather than held in memory, so the cap is a sanity limit only.
+    Override with RALLYCLIP_MAX_UPLOAD_GB (float, > 0).
+    """
+    raw = os.environ.get("RALLYCLIP_MAX_UPLOAD_GB", "").strip()
+    gb = DEFAULT_MAX_UPLOAD_GB
+    if raw:
+        try:
+            parsed = float(raw)
+            if parsed > 0:
+                gb = parsed
+        except ValueError:
+            logging.warning("Ignoring invalid RALLYCLIP_MAX_UPLOAD_GB=%r", raw)
+    return int(gb * 1024 * 1024 * 1024)
+
+
+DEFAULT_MAX_UPLOAD_GB = 32.0
+MAX_UPLOAD_BYTES = _max_upload_bytes()
+# The frontend reads this cap from /api/config/defaults so the UI and the
+# server never disagree about the limit.
+app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_BYTES
 CORS(
     app,
     resources={
@@ -263,6 +289,12 @@ CORS(
         }
     },
 )
+
+@app.errorhandler(413)
+def _request_too_large(_exc):
+    limit_gb = MAX_UPLOAD_BYTES / (1024 ** 3)
+    return jsonify({"error": f"File exceeds the {limit_gb:g} GB upload limit."}), 413
+
 
 _LOCAL_ORIGIN_RE = re.compile(r"^http://(127\.0\.0\.1|localhost)(:\d+)?$")
 _LOCAL_HOSTS = {"127.0.0.1", "localhost"}
@@ -1489,14 +1521,87 @@ _CLIENT_KEYS = {
     "min_dur_sec",
     "start_time",
     "duration",
+    # Heatmap decode overrides (rallyclip_core.contracts.DECODE_OVERRIDE_KEYS).
+    # Absent from DEFAULT_CONFIG on purpose: unset = manifest postprocess.params.
+    "threshold",
+    "merge_gap_sec",
+    "smooth_sigma_frames",
+    "hybrid_min_duration_sec",
+    "end_pad_sec",
 }
 
 
+# Named per-run decode profiles the GUI offers as a select. Data, not model
+# contract: each preset is a set of heatmap decode overrides
+# (rallyclip_core.contracts.DECODE_OVERRIDE_KEYS) layered over the manifest's
+# postprocess.params, exactly like the per-key overrides above. "default" sends
+# nothing, so a default GUI run stays identical to a manifest-only run.
+# jp-junior mirrors configs/decode/jp-junior.toml (test-enforced).
+DEFAULT_DECODE_PRESET = "default"
+DECODE_PRESETS: Dict[str, Dict[str, Any]] = {
+    "default": {
+        "label": "Standard (model defaults)",
+        "description": "Decode settings from the bundled model manifest.",
+        "params": {},
+    },
+    "jp-junior": {
+        "label": "日本ジュニア（固定後方カメラ）",
+        "description": (
+            "Japanese junior matches, fixed rear camera: keeps short points "
+            "(1 s duration floor instead of 4 s) and pads ends 1.6 s."
+        ),
+        "params": {
+            "threshold": 0.5,
+            "smooth_sigma_frames": 1.5,
+            "merge_gap_sec": 0.0,
+            "hybrid_min_duration_sec": 1.0,
+            "end_pad_sec": 1.6,
+        },
+    },
+}
+
+
+def _decode_presets_payload() -> list[Dict[str, Any]]:
+    return [
+        {
+            "id": preset_id,
+            "label": preset["label"],
+            "description": preset["description"],
+            "params": dict(preset["params"]),
+        }
+        for preset_id, preset in DECODE_PRESETS.items()
+    ]
+
+
+def _resolve_decode_preset(raw_value: Any) -> str:
+    """Validate a client-supplied preset id; None/"" means the default preset."""
+    if raw_value is None or raw_value == "":
+        return DEFAULT_DECODE_PRESET
+    if not isinstance(raw_value, str) or raw_value not in DECODE_PRESETS:
+        known = ", ".join(DECODE_PRESETS)
+        raise ValueError(f"Unknown decode preset {raw_value!r} (expected one of: {known}).")
+    return raw_value
+
+
 def _normalize_config(raw: Dict[str, Any]) -> Dict[str, Any]:
+    """Merge client overrides over DEFAULT_CONFIG.
+
+    A ``decode_preset`` id resolves to its decode params first; explicit
+    per-key decode values in the same request win over the preset.
+    Raises ValueError (user-facing) for an unknown preset or an invalid
+    heatmap decode override.
+    """
+    preset_id = _resolve_decode_preset((raw or {}).get("decode_preset"))
     cfg = {**DEFAULT_CONFIG}
+    cfg.update(DECODE_PRESETS[preset_id]["params"])
     cfg.update(
         {k: v for k, v in (raw or {}).items() if v is not None and k in _CLIENT_KEYS}
     )
+    # Kept in the job config (and so in the worker's analysis_job.json) to
+    # record which profile produced the run.
+    cfg["decode_preset"] = preset_id
+    decode_overrides = coerce_decode_overrides(cfg) or {}
+    cfg.update(decode_overrides)
     cfg["yolo_size"] = "nano"
     cfg["yolo_weights"] = FIXED_YOLO_MODEL
     # Pipeline is a property of the selected artifact. Sticky GUI defaults
@@ -1706,6 +1811,7 @@ def _run_pipeline(job_id: str) -> None:
             duration=int(cfg["duration"]),
             models_dir=models_dir,
             estimated_duration_s=duration_seconds,
+            decode_params=coerce_decode_overrides(cfg),
         )
         deps = RuntimeDeps(
             np=runtime.np,
@@ -2016,6 +2122,10 @@ def config_defaults() -> tuple[Any, int]:
             "available_devices": _RUNTIME_STATUS.get("available_devices", ["cpu"]),
             "auto_device": _RUNTIME_STATUS.get("auto_device", "cpu"),
             "runtime_state": _RUNTIME_STATUS.get("state", "cold"),
+            "max_upload_bytes": MAX_UPLOAD_BYTES,
+            # Presets live server-side so the CLI profile, the API, and the UI
+            # can't drift; the frontend hides its select if this key is absent.
+            "decode_presets": _decode_presets_payload(),
         }
     ), 200
 
@@ -2117,7 +2227,10 @@ def upload_and_start():
         cfg_raw = json.loads(request.form.get("config", "{}") or "{}")
     except json.JSONDecodeError:
         cfg_raw = {}
-    cfg = _normalize_config(cfg_raw)
+    try:
+        cfg = _normalize_config(cfg_raw)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
 
     job_id = str(uuid.uuid4())
     try:

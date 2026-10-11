@@ -309,3 +309,120 @@ def test_heatmap_model_rejects_non_onnx(tmp_path, monkeypatch):
     model = build_analysis_model(request, _spec(tmp_path), _fake_deps())
     with pytest.raises(UnsupportedPipelineError, match="ONNX models only"):
         model.run()
+
+
+# ------------------------------------------- per-run decode overrides (request > manifest)
+
+
+def _decode_cfg_for(tmp_path, decode_params, *, spec_params=None):
+    from dataclasses import replace as dc_replace
+
+    from infer import HeatmapDecodeConfig
+
+    request = dc_replace(_make_request(tmp_path), decode_params=decode_params)
+    deps = _fake_deps()
+    deps.heatmap_decode_config_cls = HeatmapDecodeConfig
+    model = build_analysis_model(request, _spec(tmp_path, params=spec_params), deps)
+    return model._decode_config()
+
+
+def test_decode_config_without_overrides_is_manifest_only(tmp_path):
+    cfg = _decode_cfg_for(tmp_path, None)
+    assert cfg.threshold == 0.5
+    assert cfg.sigma_frames == 2.5
+    assert cfg.min_duration_sec == 0.3
+    assert cfg.end_pad_sec == 0.0
+    assert cfg.merge_gap_sec == 0.0
+
+
+def test_decode_config_request_overrides_win_over_manifest(tmp_path):
+    cfg = _decode_cfg_for(
+        tmp_path,
+        {"threshold": 0.7, "end_pad_sec": 1.5, "merge_gap_sec": 1.0},
+        spec_params={"mode": "hybrid", "threshold": 0.5, "merge_gap_sec": 0.5, "sigma_frames": 2.5},
+    )
+    assert cfg.threshold == 0.7  # request wins
+    assert cfg.end_pad_sec == 1.5  # absent from manifest, set by request
+    assert cfg.merge_gap_sec == 1.0
+    assert cfg.sigma_frames == 2.5  # untouched manifest value survives
+
+
+def test_decode_config_ignores_none_and_unknown_override_keys(tmp_path, caplog):
+    with caplog.at_level("WARNING"):
+        cfg = _decode_cfg_for(tmp_path, {"threshold": None, "not_a_field": 3, "end_pad_sec": 1.0})
+    assert cfg.threshold == 0.5  # None does not clobber the manifest value
+    assert cfg.end_pad_sec == 1.0
+    assert any("not_a_field" in r.getMessage() for r in caplog.records)
+
+
+def test_decode_overrides_change_run_output(tmp_path, monkeypatch):
+    # End-to-end through model.run(): threshold override drops the weak run,
+    # end_pad extends the strong one.
+    n = 40
+    point = np.full(n, 0.1, dtype=np.float32)
+    point[5:11] = 0.9
+    point[20:26] = 0.6
+    start = np.zeros(n, dtype=np.float32)
+    start[[5, 20]] = 0.9
+    end = np.zeros(n, dtype=np.float32)
+    end[[10, 25]] = 0.9
+    _install_fakes(monkeypatch, np.stack([point, start, end], axis=0))
+    from dataclasses import replace as dc_replace
+
+    base = build_analysis_model(_make_request(tmp_path, write_csv=False), _spec(tmp_path), _fake_deps()).run()
+    assert len(base.intervals_sec) == 2
+
+    request = dc_replace(
+        _make_request(tmp_path, write_csv=False),
+        decode_params={"threshold": 0.7, "end_pad_sec": 1.0},
+    )
+    result = build_analysis_model(request, _spec(tmp_path), _fake_deps()).run()
+    assert result.intervals_sec == [pytest.approx((5 / FPS, 10 / FPS + 1.0))]
+
+
+def test_classic_pipeline_ignores_decode_overrides(tmp_path):
+    # The hysteresis spec has no heatmap decode; decode_params must not reach it.
+    from dataclasses import replace as dc_replace
+
+    from rallyclip_core.contracts import PipelineSpec
+    from rallyclip_core.pipelines import FRAME_PROBABILITY_HYSTERESIS
+
+    request = dc_replace(
+        _make_request(tmp_path), pipeline_id=FRAME_PROBABILITY_HYSTERESIS,
+        sigma=1.0, low=0.45, high=0.7, min_dur_sec=1.0,
+        decode_params={"threshold": 0.7, "end_pad_sec": 1.0},
+    )
+    spec = PipelineSpec(
+        pipeline_id=FRAME_PROBABILITY_HYSTERESIS, feature_set="v1",
+        model_output="frame_probability", decode_method="gaussian_hysteresis",
+        params={"sigma": 1.0, "low": 0.45, "high": 0.7, "min_dur_sec": 1.0},
+    )
+    from infer import extract_segments_from_binary, gaussian_filter1d, hysteresis_threshold
+
+    deps = _fake_deps()
+    deps.gaussian_filter1d = gaussian_filter1d
+    deps.hysteresis_threshold = hysteresis_threshold
+    deps.extract_segments_from_binary = extract_segments_from_binary
+    model = build_analysis_model(request, spec, deps)
+    assert not isinstance(model, HeatmapHybridModel)
+    probs = np.zeros(30, dtype=np.float32)
+    probs[5:15] = 0.9
+    plain = build_analysis_model(dc_replace(request, decode_params=None), spec, deps)
+    # Runs without error and the overrides change nothing on the classic decode.
+    segs = model.postprocess(probs)
+    assert segs and segs == plain.postprocess(probs)
+
+
+def test_coerce_decode_overrides_validates_and_filters():
+    from rallyclip_core.contracts import coerce_decode_overrides
+
+    assert coerce_decode_overrides(None) is None
+    assert coerce_decode_overrides({}) is None
+    assert coerce_decode_overrides({"threshold": None, "sigma": 1.0}) is None  # unknown/None dropped
+    assert coerce_decode_overrides({"threshold": "0.65", "end_pad_sec": 1}) == {
+        "threshold": 0.65, "end_pad_sec": 1.0,
+    }
+    for bad in ({"threshold": 1.5}, {"threshold": "abc"}, {"end_pad_sec": -1.0},
+                {"merge_gap_sec": float("nan")}, {"threshold": True}):
+        with pytest.raises(ValueError):
+            coerce_decode_overrides(bad)

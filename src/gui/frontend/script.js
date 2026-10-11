@@ -1,5 +1,7 @@
 const WELCOME_SEEN_KEY = "rallyclip_welcome_seen";
 const JOB_ID_KEY = "rallyclip_job_id";
+const DECODE_PRESET_KEY = "rallyclip_decode_preset";
+const DEFAULT_DECODE_PRESET = "default";
 const WELCOME_TYPE_START_DELAY_MS = 504;
 const WELCOME_TYPE_LINE_DELAY_MS = WELCOME_TYPE_START_DELAY_MS;
 const WELCOME_TYPE_FIRST_CHAR_MS = 110;
@@ -26,7 +28,11 @@ class RallyClipApp {
         this.currentJobId = null;
         this.progressInterval = null;
         this.defaults = {};
+        // Fallback until /api/config/defaults reports the server's real cap.
+        this.maxUploadBytes = 32 * 1024 * 1024 * 1024;
         this.warnings = {};
+        // Served by /api/config/defaults; empty (control hidden) on an older backend.
+        this.decodePresets = [];
         this.availableDevices = [];
         this.autoDevice = "cpu";
         this.runtimeState = "cold";
@@ -183,6 +189,7 @@ class RallyClipApp {
         this.backToLibrary = document.getElementById("backToLibrary");
         this.dropZone = document.getElementById("dropZone");
         this.fileInput = document.getElementById("fileInput");
+        this.dropMeta = document.getElementById("dropMeta");
         this.browseBtn = document.getElementById("browseBtn");
         this.selectedFileDiv = document.getElementById("selectedFile");
         this.fileName = document.getElementById("fileName");
@@ -196,6 +203,9 @@ class RallyClipApp {
         this.outputName = document.getElementById("outputName");
         this.yoloDevice = document.getElementById("yoloDevice");
         this.deviceNote = document.getElementById("deviceNote");
+        this.decodePresetField = document.getElementById("decodePresetField");
+        this.decodePreset = document.getElementById("decodePreset");
+        this.decodePresetNote = document.getElementById("decodePresetNote");
         this.low = document.getElementById("low");
         this.high = document.getElementById("high");
         this.minDurSec = document.getElementById("minDurSec");
@@ -289,10 +299,17 @@ class RallyClipApp {
             this.advancedPanel.hidden = !this.advancedPanel.hidden;
         });
         this.resetAdvanced.addEventListener("click", () => {
+            this.storeDecodePreset(DEFAULT_DECODE_PRESET);
             this.applyDefaults();
             this.showToast("Advanced settings reset", "success");
         });
         this.yoloDevice.addEventListener("change", () => this.updateDeviceNote());
+        if (this.decodePreset) {
+            this.decodePreset.addEventListener("change", () => {
+                this.storeDecodePreset(this.decodePreset.value);
+                this.updateDecodePresetNote();
+            });
+        }
     }
 
     bindViewerVideoEvents(video) {
@@ -2951,6 +2968,12 @@ class RallyClipApp {
             this.availableDevices = payload.available_devices || ["cpu"];
             this.autoDevice = payload.auto_device || "cpu";
             this.runtimeState = payload.runtime_state || "cold";
+            this.decodePresets = Array.isArray(payload.decode_presets)
+                ? payload.decode_presets.filter((p) => p && typeof p.id === "string" && p.id)
+                : [];
+            if (Number.isFinite(payload.max_upload_bytes) && payload.max_upload_bytes > 0) {
+                this.maxUploadBytes = payload.max_upload_bytes;
+            }
             this.applyDefaults();
         } catch (err) {
             console.error(err);
@@ -2960,6 +2983,10 @@ class RallyClipApp {
 
     applyDefaults() {
         this.populateDeviceSelect();
+        this.populateDecodePresetSelect();
+        if (this.dropMeta) {
+            this.dropMeta.textContent = `MP4 · up to ${this.formatSizeLimit(this.maxUploadBytes)}`;
+        }
         this.outputName.value = "";
         this.low.value = this.defaults.low ?? 0.45;
         this.high.value = this.defaults.high ?? 0.7;
@@ -3003,6 +3030,38 @@ class RallyClipApp {
             option.disabled = Boolean(disabled);
             this.yoloDevice.appendChild(option);
         });
+    }
+
+    storeDecodePreset(presetId) {
+        try { localStorage.setItem(DECODE_PRESET_KEY, presetId); } catch (_) {}
+    }
+
+    populateDecodePresetSelect() {
+        if (!this.decodePreset || !this.decodePresetField) return;
+        this.decodePreset.innerHTML = "";
+        if (!this.decodePresets.length) {
+            this.decodePresetField.hidden = true;
+            return;
+        }
+        this.decodePresets.forEach((preset) => {
+            const option = document.createElement("option");
+            option.value = preset.id;
+            option.textContent = preset.label || preset.id;
+            this.decodePreset.appendChild(option);
+        });
+        const ids = this.decodePresets.map((preset) => preset.id);
+        let stored = null;
+        try { stored = localStorage.getItem(DECODE_PRESET_KEY); } catch (_) {}
+        const fallback = ids.includes(DEFAULT_DECODE_PRESET) ? DEFAULT_DECODE_PRESET : ids[0];
+        this.decodePreset.value = ids.includes(stored) ? stored : fallback;
+        this.decodePresetField.hidden = false;
+        this.updateDecodePresetNote();
+    }
+
+    updateDecodePresetNote() {
+        if (!this.decodePresetNote) return;
+        const preset = this.decodePresets.find((p) => p.id === this.decodePreset.value);
+        this.decodePresetNote.textContent = (preset && preset.description) || "";
     }
 
     updateDeviceNote() {
@@ -3066,9 +3125,8 @@ class RallyClipApp {
 
     processFile(file) {
         // Accept any video; the backend validates by content (codec/resolution).
-        const maxSize = 2 * 1024 * 1024 * 1024;
-        if (file.size > maxSize) {
-            this.showToast("File must be under 2GB.", "error");
+        if (file.size > this.maxUploadBytes) {
+            this.showToast(`File must be under ${this.formatSizeLimit(this.maxUploadBytes)}.`, "error");
             return;
         }
         this.selectedFile = file;
@@ -3095,6 +3153,11 @@ class RallyClipApp {
         return `${(bytes / 1024 ** i).toFixed(2)} ${units[i]}`;
     }
 
+    formatSizeLimit(bytes) {
+        // "32 GB" rather than "32.00 GB" for the drop-zone hint and error toast.
+        return this.formatFileSize(bytes).replace(/\.00 /, " ");
+    }
+
     buildConfigFromForm() {
         const cfg = { ...(this.defaults || {}) };
         cfg.output_name = this.outputName.value.trim() || null;
@@ -3107,6 +3170,10 @@ class RallyClipApp {
         cfg.low = Number.isNaN(parsedLow) ? cfg.low : parsedLow;
         cfg.high = Number.isNaN(parsedHigh) ? cfg.high : parsedHigh;
         cfg.min_dur_sec = Number.isNaN(parsedMinDur) ? cfg.min_dur_sec : parsedMinDur;
+        // Only when the backend advertised presets; the server resolves the id.
+        if (this.decodePresets.length && this.decodePreset && this.decodePreset.value) {
+            cfg.decode_preset = this.decodePreset.value;
+        }
         return cfg;
     }
 

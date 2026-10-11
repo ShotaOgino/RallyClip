@@ -416,3 +416,73 @@ def test_gaussian_smooth_preserves_length_and_mass():
     assert out.max() <= 1.0 + 1e-6
     assert out[25] > 0.9  # plateau centre survives
     assert out[10] < 0.05  # far field stays near zero
+
+
+# --- end_pad_sec (label-convention end offset, applied after merging) ---
+
+
+def _two_point_tracks(n: int = 60, first=(5, 15), second=(25, 35)):
+    """Two clean point runs; sharp start/end spikes so refined edges == run edges."""
+    point = np.zeros(n, dtype=np.float32)
+    start = np.zeros(n, dtype=np.float32)
+    end = np.zeros(n, dtype=np.float32)
+    for a, b in (first, second):
+        point[a:b + 1] = 0.9
+        start[a] = 1.0
+        end[b] = 1.0
+    return point, start, end, _timestamps(n)
+
+
+def test_end_pad_defaults_to_noop_bit_identical():
+    assert HeatmapDecodeConfig().end_pad_sec == 0.0
+    point, start, end, ts = _fp_tracks()
+    base = decode_hybrid(point, start, end, ts, _fp_cfg())
+    explicit_zero = decode_hybrid(point, start, end, ts, _fp_cfg(end_pad_sec=0.0))
+    assert base == explicit_zero  # exact equality, not approx
+    pp_cfg = HeatmapDecodeConfig(mode="peakpair", peak_threshold=0.5, sigma_frames=1.0)
+    assert decode_peakpair(point, start, end, ts, pp_cfg) == decode_peakpair(
+        point, start, end, ts, HeatmapDecodeConfig(mode="peakpair", peak_threshold=0.5,
+                                                   sigma_frames=1.0, end_pad_sec=0.0)
+    )
+
+
+def test_end_pad_extends_each_end_only():
+    point, start, end, ts = _two_point_tracks()
+    cfg = _fp_cfg(end_pad_sec=1.0)
+    segs = decode_hybrid(point, start, end, ts, cfg)
+    assert segs == [pytest.approx((1.0, 4.0)), pytest.approx((5.0, 8.0))]
+
+
+def test_end_pad_remerges_segments_that_now_overlap():
+    # Gap between the points is 2.0s (3.0 -> 5.0); a 2.0s pad makes them touch.
+    point, start, end, ts = _two_point_tracks()
+    segs = decode_hybrid(point, start, end, ts, _fp_cfg(end_pad_sec=2.0))
+    assert segs == [pytest.approx((1.0, 9.0))]
+    # Just short of touching stays two segments: re-merge is gap 0, not merge_gap_sec.
+    segs = decode_hybrid(point, start, end, ts, _fp_cfg(end_pad_sec=1.5, merge_gap_sec=0.6))
+    assert len(segs) == 2
+
+
+def test_end_pad_clamps_to_last_timestamp():
+    n = 40
+    point, start, end, ts = _two_point_tracks(n=n, first=(5, 15), second=(30, 37))
+    segs = decode_hybrid(point, start, end, ts, _fp_cfg(end_pad_sec=5.0))
+    assert segs[-1][1] == pytest.approx(float(ts[-1]))
+    assert all(e <= float(ts[-1]) for _s, e in segs)
+
+
+def test_end_pad_applies_after_duration_floor():
+    # The floor judges the detected (unpadded) duration: the 0.4s burst is dropped
+    # even though the pad alone would lift it over the 1.0s floor.
+    point, start, end, ts = _fp_tracks()
+    segs = decode_hybrid(point, start, end, ts, _fp_cfg(hybrid_min_duration_sec=1.0, end_pad_sec=1.0))
+    assert len(segs) == 2
+
+
+def test_end_pad_applies_in_peakpair_mode():
+    point, start, end, ts = _two_point_tracks()
+    cfg = HeatmapDecodeConfig(mode="peakpair", peak_threshold=0.5, sigma_frames=1.0, end_pad_sec=1.0)
+    segs = decode_peakpair(point, start, end, ts, cfg)
+    assert segs == [pytest.approx((1.0, 4.0)), pytest.approx((5.0, 8.0))]
+    cfg = HeatmapDecodeConfig(mode="peakpair", peak_threshold=0.5, sigma_frames=1.0, end_pad_sec=2.0)
+    assert decode_peakpair(point, start, end, ts, cfg) == [pytest.approx((1.0, 9.0))]

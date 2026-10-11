@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Tuple
 
 
 Interval = Tuple[float, float]
@@ -47,6 +48,50 @@ class RunRequest:
     manifest_path: Optional[Path] = None
     models_dir: Optional[Path] = None
     estimated_duration_s: Optional[float] = None
+    # Per-run overrides for the boundary-heatmap decode (HeatmapDecodeConfig
+    # fields), merged OVER the manifest's postprocess.params by the heatmap
+    # pipeline. None (default) = manifest only. Pipelines without a heatmap
+    # decode (classic hysteresis) ignore it. Build with coerce_decode_overrides.
+    decode_params: Optional[Dict[str, Any]] = None
+
+
+# Heatmap decode knobs a user may override per run (config.toml [run] / CLI /
+# /api job config). Each maps 1:1 to a HeatmapDecodeConfig field. Value is the
+# inclusive lower bound and optional inclusive upper bound.
+DECODE_OVERRIDE_BOUNDS: Dict[str, Tuple[float, Optional[float]]] = {
+    "threshold": (0.0, 1.0),
+    "merge_gap_sec": (0.0, None),
+    "smooth_sigma_frames": (0.0, None),
+    "hybrid_min_duration_sec": (0.0, None),
+    "end_pad_sec": (0.0, None),
+}
+DECODE_OVERRIDE_KEYS: Tuple[str, ...] = tuple(DECODE_OVERRIDE_BOUNDS)
+
+
+def coerce_decode_overrides(values: Optional[Mapping[str, Any]]) -> Optional[Dict[str, float]]:
+    """Validate user-supplied heatmap decode overrides.
+
+    Keeps only DECODE_OVERRIDE_KEYS with non-None values, coerced to float.
+    Returns None when nothing is overridden, so the default request stays
+    identical to a manifest-only run. Raises ValueError on a non-numeric,
+    non-finite, or out-of-range value.
+    """
+    out: Dict[str, float] = {}
+    for key, raw in (values or {}).items():
+        if key not in DECODE_OVERRIDE_BOUNDS or raw is None:
+            continue
+        if isinstance(raw, bool):
+            raise ValueError(f"Decode parameter '{key}' must be a number, got {raw!r}.")
+        try:
+            val = float(raw)
+        except (TypeError, ValueError):
+            raise ValueError(f"Decode parameter '{key}' must be a number, got {raw!r}.") from None
+        lo, hi = DECODE_OVERRIDE_BOUNDS[key]
+        if not math.isfinite(val) or val < lo or (hi is not None and val > hi):
+            bound = f"[{lo:g}, {hi:g}]" if hi is not None else f">= {lo:g}"
+            raise ValueError(f"Decode parameter '{key}'={raw!r} is out of range (expected {bound}).")
+        out[key] = val
+    return out or None
 
 
 @dataclass(frozen=True)

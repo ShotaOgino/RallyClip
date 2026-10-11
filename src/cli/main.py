@@ -28,7 +28,13 @@ from runtime.defaults import DEFAULT_ARTIFACT_DIR
 from runtime.device import apply_pose_device
 from runtime.video_validation import VideoValidationError, validate_video
 from segmentation.segment import segment_video
-from rallyclip_core.contracts import RunRequest, RuntimeDeps, UnsupportedPipelineError
+from rallyclip_core.contracts import (
+    DECODE_OVERRIDE_KEYS,
+    RunRequest,
+    RuntimeDeps,
+    UnsupportedPipelineError,
+    coerce_decode_overrides,
+)
 from rallyclip_api import RallyClipServices, run_result_payload
 
 try:  # Python 3.11+ ships tomllib; fall back to tomli otherwise.
@@ -77,6 +83,8 @@ class RunConfig:
     manifest_path: Optional[Path] = None
     pipeline_id: Optional[str] = None
     emit_json: bool = False
+    # Heatmap decode overrides (CLI -> config); None = manifest postprocess.params only.
+    decode_params: Optional[Dict[str, Any]] = None
 
 
 def _load_config_dict(path: Optional[str]) -> Dict[str, Any]:
@@ -148,6 +156,23 @@ def _resolve_mutable(name: str, cli_val: Any, cfg_val: Any, manifest_val: Any) -
             f"Set it in config.toml or use a manifest with a postprocess section."
         )
     return val
+
+
+def _resolve_decode_overrides(arg, cfg) -> Optional[Dict[str, Any]]:
+    """Heatmap decode knobs: CLI -> config.toml -> (manifest, applied in the engine).
+
+    Unlike _resolve_mutable, an unset knob is not resolved to the manifest value
+    here: it is simply left out, and the heatmap pipeline merges what is set over
+    the manifest's postprocess.params. Pipelines without a heatmap decode ignore
+    these, so a classic artifact (no such manifest keys) must not crash.
+    """
+    picked = {
+        key: (arg(key) if arg(key) is not None else cfg(key)) for key in DECODE_OVERRIDE_KEYS
+    }
+    try:
+        return coerce_decode_overrides(picked)
+    except ValueError as exc:
+        raise SystemExit(f"Invalid heatmap decode setting: {exc}") from exc
 
 
 def build_run_config(args: argparse.Namespace) -> RunConfig:
@@ -233,6 +258,7 @@ def build_run_config(args: argparse.Namespace) -> RunConfig:
     low = float(_resolve_mutable("low", arg("low"), cfg("low"), manifest.get("low")))
     high = float(_resolve_mutable("high", arg("high"), cfg("high"), manifest.get("high")))
     min_dur_sec = float(_resolve_mutable("min_dur_sec", arg("min_dur_sec"), cfg("min_dur_sec"), manifest.get("min_dur_sec")))
+    decode_params = _resolve_decode_overrides(arg, cfg)
 
     return RunConfig(
         video_path=Path(video_path).expanduser().resolve(),
@@ -262,6 +288,7 @@ def build_run_config(args: argparse.Namespace) -> RunConfig:
         start_time=int(arg("start_time") if arg("start_time") is not None else cfg("start_time", 0)),
         duration=int(arg("duration") if arg("duration") is not None else cfg("duration", 999999)),
         emit_json=bool(arg("emit_json") or False),
+        decode_params=decode_params,
     )
 
 
@@ -307,6 +334,7 @@ def run_pipeline(cfg: RunConfig) -> int:
         start_time=cfg.start_time,
         duration=cfg.duration,
         models_dir=Path.cwd() / "models",
+        decode_params=cfg.decode_params,
     )
     deps = RuntimeDeps(
         np=np,
@@ -392,6 +420,13 @@ def main(*, force_cli: bool = False) -> int:
     p.add_argument("--low", type=float, help="Hysteresis low threshold")
     p.add_argument("--high", type=float, help="Hysteresis high threshold")
     p.add_argument("--min-dur-sec", type=float, help="Minimum segment duration in seconds")
+    # Heatmap (boundary TCN) decode overrides; default = the model manifest's postprocess.params.
+    # Ignored by the classic hysteresis pipeline.
+    p.add_argument("--threshold", type=float, help="Heatmap pointness threshold (0-1)")
+    p.add_argument("--merge-gap-sec", type=float, help="Heatmap: merge segments whose gap is <= this (s)")
+    p.add_argument("--smooth-sigma-frames", type=float, help="Heatmap: Gaussian-smooth pointness before detection (frames)")
+    p.add_argument("--hybrid-min-duration-sec", type=float, help="Heatmap: drop merged segments shorter than this (s)")
+    p.add_argument("--end-pad-sec", type=float, help="Heatmap: extend every segment end by this many seconds")
     p.add_argument("--conf", type=float, help="Pose model confidence threshold")
     p.add_argument("--imgsz", type=int, help="YOLO inference image size")
     p.add_argument("--start-time", type=int, help="Start time offset (seconds)")

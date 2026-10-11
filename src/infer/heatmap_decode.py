@@ -63,6 +63,13 @@ class HeatmapDecodeConfig:
     # fragment plus the rest of the same point (CI golden split on
     # ubuntu/windows).
     merge_gap_sec: float = 0.0
+    # Extend every decoded segment's end by this many seconds, AFTER merging (and,
+    # in hybrid mode, after the hybrid_min_duration_sec floor), then re-merge
+    # touch-or-overlap only and clamp to the last timestamp. Matches label
+    # conventions that end a point after the ball is dead (beta-tennis: +1.3-1.6s).
+    # Default 0 skips the step entirely, so existing decodes stay bit-identical.
+    # Runtime-only knob: the training-side decode has no equivalent.
+    end_pad_sec: float = 0.0
 
     def _refine_window(self) -> int:
         return int(self.refine_window_frames if self.refine_window_frames is not None
@@ -97,6 +104,20 @@ def _merge_intervals(segments: List[Interval], gap: float = 0.0) -> List[Interva
         else:
             merged.append(seg)
     return merged
+
+
+def _pad_ends(segments: List[Interval], pad_sec: float, last_time: float) -> List[Interval]:
+    """Extend each segment end by pad_sec (clamped to last_time), then re-merge.
+
+    Re-merge is touch-or-overlap only (gap 0): padding must not widen the
+    merge_gap_sec budget, which already ran on the unpadded segments.
+    Non-positive pad is a no-op (returns the input unchanged).
+    """
+    pad = float(pad_sec)
+    if pad <= 0 or not segments:
+        return segments
+    padded = [(s, max(e, min(e + pad, last_time))) for s, e in segments]
+    return _merge_intervals(padded, gap=0.0)
 
 
 def _soft_argmax_time(
@@ -187,6 +208,8 @@ def decode_hybrid(
     # form a real point are not discarded individually.
     if cfg.hybrid_min_duration_sec > 0:
         merged = [(s, e) for s, e in merged if (e - s) >= cfg.hybrid_min_duration_sec]
+    if cfg.end_pad_sec > 0 and len(timestamps):
+        merged = _pad_ends(merged, cfg.end_pad_sec, float(timestamps[-1]))
     return merged
 
 
@@ -226,7 +249,10 @@ def decode_peakpair(
         used[k] = True
         ei = k + 1
         segments.append((st, et))
-    return _merge_intervals(segments, gap=cfg.merge_gap_sec)
+    merged = _merge_intervals(segments, gap=cfg.merge_gap_sec)
+    if cfg.end_pad_sec > 0 and len(timestamps):
+        merged = _pad_ends(merged, cfg.end_pad_sec, float(timestamps[-1]))
+    return merged
 
 
 def decode_heatmap_segments(

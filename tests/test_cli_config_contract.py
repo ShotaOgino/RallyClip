@@ -30,6 +30,11 @@ def _args(**overrides):
         "low": None,
         "high": None,
         "min_dur_sec": None,
+        "threshold": None,
+        "merge_gap_sec": None,
+        "smooth_sigma_frames": None,
+        "hybrid_min_duration_sec": None,
+        "end_pad_sec": None,
         "conf": None,
         "imgsz": None,
         "start_time": None,
@@ -314,3 +319,109 @@ def test_force_cli_no_args_does_not_launch_gui(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, "argv", ["RallyClip"])
     with pytest.raises(SystemExit, match="Please provide a video"):
         cli_main.main(force_cli=True)
+
+
+# --- heatmap decode overrides: CLI -> config.toml -> manifest (engine-side merge) ---
+
+
+def test_decode_overrides_default_to_none_so_manifest_rules(tmp_path, monkeypatch):
+    cli_main = import_cli_main_with_stubs(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+
+    cfg = cli_main.build_run_config(_asset_args(tmp_path))
+
+    # Nothing set -> no override channel at all (golden/default runs unchanged).
+    assert cfg.decode_params is None
+
+
+def test_decode_overrides_from_config_toml(tmp_path, monkeypatch):
+    cli_main = import_cli_main_with_stubs(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    config_path = tmp_path / "custom.toml"
+    config_path.write_text(
+        """
+[run]
+threshold = 0.65
+merge_gap_sec = 1.0
+smooth_sigma_frames = 1.5
+hybrid_min_duration_sec = 2.0
+end_pad_sec = 1.4
+""",
+        encoding="utf-8",
+    )
+
+    cfg = cli_main.build_run_config(_asset_args(tmp_path, config=str(config_path)))
+
+    assert cfg.decode_params == {
+        "threshold": 0.65,
+        "merge_gap_sec": 1.0,
+        "smooth_sigma_frames": 1.5,
+        "hybrid_min_duration_sec": 2.0,
+        "end_pad_sec": 1.4,
+    }
+
+
+def test_decode_overrides_cli_beats_config(tmp_path, monkeypatch):
+    cli_main = import_cli_main_with_stubs(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "config.toml").write_text(
+        """
+[run]
+threshold = 0.65
+end_pad_sec = 1.4
+""",
+        encoding="utf-8",
+    )
+
+    cfg = cli_main.build_run_config(_asset_args(tmp_path, threshold=0.7, merge_gap_sec=0.8))
+
+    assert cfg.decode_params == {"threshold": 0.7, "end_pad_sec": 1.4, "merge_gap_sec": 0.8}
+
+
+def test_decode_override_invalid_value_exits(tmp_path, monkeypatch):
+    cli_main = import_cli_main_with_stubs(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(SystemExit, match="threshold"):
+        cli_main.build_run_config(_asset_args(tmp_path, threshold=1.5))
+    with pytest.raises(SystemExit, match="end_pad_sec"):
+        cli_main.build_run_config(_asset_args(tmp_path, end_pad_sec=-0.5))
+
+
+def test_decode_overrides_reach_run_request(tmp_path, monkeypatch):
+    cli_main = import_cli_main_with_stubs(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    cfg = cli_main.build_run_config(_asset_args(tmp_path, end_pad_sec=1.5))
+    captured = {}
+
+    class _FakeServices:
+        def run_analysis(self, request, deps=None):
+            captured["request"] = request
+            return None
+
+    monkeypatch.setattr(cli_main, "validate_video", lambda *a, **k: None)
+    monkeypatch.setattr(cli_main, "RallyClipServices", _FakeServices)
+
+    assert cli_main.run_pipeline(cfg) == 0
+    assert captured["request"].decode_params == {"end_pad_sec": 1.5}
+
+
+def test_decode_override_flags_are_supported_by_argparse(monkeypatch, tmp_path):
+    cli_main = import_cli_main_with_stubs(monkeypatch)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "rallyclip", "--video", str(tmp_path / "match.mp4"),
+            "--threshold", "0.7", "--merge-gap-sec", "1.0", "--smooth-sigma-frames", "1.5",
+            "--hybrid-min-duration-sec", "2.0", "--end-pad-sec", "1.4",
+        ],
+    )
+    seen = {}
+    monkeypatch.setattr(cli_main, "build_run_config", lambda args: seen.setdefault("args", args))
+    monkeypatch.setattr(cli_main, "run_pipeline", lambda cfg: 0)
+
+    assert cli_main.main() == 0
+    args = seen["args"]
+    assert (args.threshold, args.merge_gap_sec, args.smooth_sigma_frames,
+            args.hybrid_min_duration_sec, args.end_pad_sec) == (0.7, 1.0, 1.5, 2.0, 1.4)

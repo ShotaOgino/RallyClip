@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Iterable, List, Optional
@@ -517,6 +518,12 @@ class HeatmapHybridModel(AnalysisModel):
 
         valid = set(config_cls.__dataclass_fields__)
         params = {k: v for k, v in (self.spec.params or {}).items() if k in valid and v is not None}
+        # Per-run overrides (config.toml / CLI / API) win over the manifest.
+        overrides = getattr(self.request, "decode_params", None) or {}
+        unknown = sorted(k for k in overrides if k not in valid)
+        if unknown:
+            logging.warning("Ignoring unknown heatmap decode override(s): %s", ", ".join(unknown))
+        params.update({k: v for k, v in overrides.items() if k in valid and v is not None})
         return config_cls(**params)
 
     def postprocess(self, model_output) -> List[Interval]:

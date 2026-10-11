@@ -7,6 +7,7 @@ breaking API change and must be deliberate.
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import sys
@@ -127,9 +128,52 @@ def test_config_defaults_response_contract(client):
         "available_devices",
         "auto_device",
         "runtime_state",
+        "max_upload_bytes",
+        "decode_presets",
     }
     # Server-internal paths must never reach the browser payload.
     for key in ("model_path", "artifact_dir", "scaler_path", "yolo_weights"):
         assert key not in payload["defaults"]
     assert isinstance(payload["available_devices"], list)
     assert isinstance(payload["defaults"], dict)
+    # The UI reads its upload cap from here so it can never disagree with Flask.
+    assert payload["max_upload_bytes"] == gui_app.MAX_UPLOAD_BYTES
+    assert payload["max_upload_bytes"] > 2 * 1024 ** 3
+
+
+def test_config_defaults_lists_decode_presets(client):
+    presets = client.get("/api/config/defaults").get_json()["decode_presets"]
+    assert isinstance(presets, list)
+    by_id = {p["id"]: p for p in presets}
+    assert presets[0]["id"] == "default"  # the UI's fallback choice comes first
+    for preset in presets:
+        assert set(preset) == {"id", "label", "description", "params"}
+        assert preset["label"] and preset["description"]
+    assert by_id["default"]["params"] == {}
+    assert by_id["jp-junior"]["params"] == {
+        "threshold": 0.5,
+        "smooth_sigma_frames": 1.5,
+        "merge_gap_sec": 0.0,
+        "hybrid_min_duration_sec": 1.0,
+        "end_pad_sec": 1.6,
+    }
+
+
+def test_max_upload_cap_env_override(monkeypatch):
+    monkeypatch.setenv("RALLYCLIP_MAX_UPLOAD_GB", "0.5")
+    assert gui_app._max_upload_bytes() == 512 * 1024 ** 2
+    monkeypatch.setenv("RALLYCLIP_MAX_UPLOAD_GB", "not-a-number")
+    assert gui_app._max_upload_bytes() == int(gui_app.DEFAULT_MAX_UPLOAD_GB * 1024 ** 3)
+    monkeypatch.delenv("RALLYCLIP_MAX_UPLOAD_GB")
+    assert gui_app._max_upload_bytes() == int(gui_app.DEFAULT_MAX_UPLOAD_GB * 1024 ** 3)
+
+
+def test_upload_over_cap_returns_json_413(client, monkeypatch):
+    monkeypatch.setitem(gui_app.app.config, "MAX_CONTENT_LENGTH", 1024)
+    resp = client.post(
+        "/api/upload-and-start",
+        data={"video": (io.BytesIO(b"0" * 4096), "big.mp4")},
+        content_type="multipart/form-data",
+    )
+    assert resp.status_code == 413
+    assert "upload limit" in resp.get_json()["error"]

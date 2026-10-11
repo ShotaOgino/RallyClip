@@ -33,6 +33,20 @@ sigma = 1.0
 low = 0.45
 high = 0.7
 min_dur_sec = 1.0
+# (overlap/sigma/low/high/min_dur_sec above drive the classic hysteresis pipeline.)
+
+# Heatmap decode overrides (boundary-heatmap pipelines, e.g. the shipped v0.6.0
+# heatmap_hybrid). Unset = the model manifest's postprocess.params (v0.6.0:
+# threshold 0.5, merge_gap_sec 0.0, smooth_sigma_frames 1.5,
+# hybrid_min_duration_sec 4.0, no end pad). Precedence:
+# CLI flag (--threshold, --merge-gap-sec, --smooth-sigma-frames,
+# --hybrid-min-duration-sec, --end-pad-sec) -> this file -> manifest.
+# The classic hysteresis pipeline ignores these.
+# threshold = 0.5                 # pointness threshold, 0-1 (higher = fewer merged points)
+# merge_gap_sec = 0.0             # merge segments whose gap is <= this (s)
+# smooth_sigma_frames = 1.5       # Gaussian-smooth pointness before detection (frames)
+# hybrid_min_duration_sec = 4.0   # drop merged segments shorter than this (s)
+# end_pad_sec = 0.0               # extend every segment end by this (s); re-merges overlaps
 
 # Runtime window
 start_time = 0
